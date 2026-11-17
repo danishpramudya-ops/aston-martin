@@ -1,17 +1,22 @@
 import React, { useState } from 'react';
-import { Volume2, ShieldCheck, Layers } from 'lucide-react';
+import { Compass, Layers, ShieldCheck, Volume2 } from 'lucide-react';
 import type { AstonCar, CabinElement, QCabinTrim } from '../data/cars';
 
 interface ChassisCabinLabProps {
   car: AstonCar;
   cabinTrim: QCabinTrim;
+  onSitInsidePov?: () => void;
 }
 
 /**
  * Interactive Gaydon Cabin Craft & Structural Material Observatory.
  * Visualizes Bridge of Weir hide & stitching pairings, cockpit ergonomics, and acoustic arrays.
  */
-export const ChassisCabinLab: React.FC<ChassisCabinLabProps> = ({ car, cabinTrim }) => {
+export const ChassisCabinLab: React.FC<ChassisCabinLabProps> = ({
+  car,
+  cabinTrim,
+  onSitInsidePov,
+}) => {
   const [activeEl, setActiveEl] = useState<CabinElement>(car.cabinElements[0]);
 
   return (
@@ -34,6 +39,14 @@ export const ChassisCabinLab: React.FC<ChassisCabinLabProps> = ({ car, cabinTrim
               <span>SADDLERY &amp; ARCHITECTURE // {cabinTrim.name}</span>
             </div>
           </div>
+          {onSitInsidePov && (
+            <div className="hud-top-right">
+              <button type="button" className="hud-tool-btn active" onClick={onSitInsidePov}>
+                <Compass size={12} />
+                <span>Sit Inside 3D Cockpit</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Left: Interactive Saddlery & Ergonomic Blueprint */}

@@ -585,8 +585,8 @@ select {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  min-height: 440px;
-  max-height: 660px;
+  min-height: 400px;
+  max-height: 550px;
   background: radial-gradient(ellipse 70% 60% at 50% 52%, #131815 0%, #070908 74%);
   overflow: hidden;
   user-select: none;
@@ -881,6 +881,212 @@ select {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.hud-tool-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Multi-POV Exterior-to-Interior Dock Bar */
+.pov-dock-bar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-hairline);
+  background: var(--bg-surface);
+}
+
+.pov-status-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 108px;
+}
+
+.pov-pills-track {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.pov-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 9px;
+  background: rgba(7, 9, 8, 0.65);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease, background-color 0.2s ease;
+}
+
+.pov-chip:hover {
+  color: var(--text-primary);
+  border-color: var(--am-champagne);
+}
+
+.pov-chip.interior-chip {
+  border-left: 2px solid rgba(200, 169, 110, 0.45);
+}
+
+.pov-chip.active {
+  background: var(--am-green);
+  border-color: var(--am-lime);
+  color: var(--text-primary);
+}
+
+.pov-chip-code {
+  font-size: 8.5px;
+  color: var(--am-champagne);
+}
+
+.pov-chip.active .pov-chip-code {
+  color: var(--am-lime);
+}
+
+@media (max-width: 900px) {
+  .pov-dock-bar,
+  .speed-control-bar {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
+
+.compass-drag-hint {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* CFD Telemetry Overlay Card inside 3D Wind Tunnel */
+.aero-telemetry-hud {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  z-index: 6;
+  background: rgba(7, 9, 8, 0.84);
+  border: 1px solid rgba(196, 214, 0, 0.35);
+  padding: 14px 18px;
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+}
+
+.aero-telemetry-head {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--am-lime);
+  margin-bottom: 10px;
+}
+
+.aero-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(84px, auto));
+  gap: 18px;
+}
+
+.aero-stat-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.aero-stat-val {
+  font-family: var(--font-mono);
+  font-size: 19px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.aero-stat-val span {
+  font-size: 10.5px;
+  color: var(--am-champagne);
+}
+
+/* Wind Tunnel Speed Slider Bar */
+.speed-control-bar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 20px;
+  padding: 13px 18px;
+  border-top: 1px solid var(--border-hairline);
+  background: var(--bg-surface);
+}
+
+.speed-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 130px;
+}
+
+.speed-num {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.speed-unit {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.speed-slider-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.speed-min,
+.speed-max {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.speed-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  background: rgba(242, 243, 240, 0.16);
+  outline: none;
+  cursor: pointer;
+}
+
+.speed-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--am-lime);
+  border: 2px solid var(--bg-void);
+  cursor: pointer;
 }
 
 /* Right Studio Side Inspector Panel */

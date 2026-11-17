@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { ArrowDownRight, Box, Compass, FileText, Layers, Volume2, VolumeX, Wind } from 'lucide-react';
 import {
   ASTON_CARS,
@@ -6,15 +6,15 @@ import {
   Q_CALIPER_FINISHES,
   Q_PAINT_FINISHES,
   type AstonCar,
-  type EngineeringHotspot,
 } from './data/cars';
 import { AstonCrest } from './components/AstonCrest';
-import { Turntable360Stage } from './components/Turntable360Stage';
-import { AeroWindTunnel3D } from './components/AeroWindTunnel3D';
+import { Hero3DStage } from './components/Hero3DStage';
+import { Observatory3DStage } from './components/Observatory3DStage';
 import { ChassisCabinLab } from './components/ChassisCabinLab';
 import { DynoTelemetryLab } from './components/DynoTelemetryLab';
 import { CommissionModal } from './components/CommissionModal';
 import { engineAudio } from './audio/engineAudio';
+import type { CameraPovId } from './three/cameraPovs';
 
 type StudioMode = 'studio' | 'aero' | 'cabin';
 
@@ -24,11 +24,9 @@ export function App() {
   const [paintId, setPaintId] = useState<string>('aluminite-silver');
   const [caliperId, setCaliperId] = useState<string>('lime-essence');
   const [cabinTrimId, setCabinTrimId] = useState<string>('onyx-lime');
-  const [azimuth, setAzimuth] = useState<number>(45);
-  const [selectedHotspot, setSelectedHotspot] = useState<EngineeringHotspot | null>(null);
+  const [povRequest, setPovRequest] = useState<{ id: CameraPovId; seq: number } | null>(null);
   const [heroAudioOn, setHeroAudioOn] = useState(false);
   const [dossierOpen, setDossierOpen] = useState(false);
-  const [scrollY, setScrollY] = useState(0);
 
   const studioSectionRef = useRef<HTMLElement | null>(null);
 
@@ -37,22 +35,20 @@ export function App() {
   const activeCaliper = Q_CALIPER_FINISHES.find((c) => c.id === caliperId) || Q_CALIPER_FINISHES[0];
   const activeCabinTrim = Q_CABIN_TRIMS.find((t) => t.id === cabinTrimId) || Q_CABIN_TRIMS[0];
 
-  useEffect(() => {
-    const onScroll = () => setScrollY(window.scrollY || 0);
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, []);
-
   const selectCar = (car: AstonCar, scrollToStudio = false) => {
     setSelectedCarId(car.id);
-    setAzimuth(car.defaultAzimuth);
-    setSelectedHotspot(null);
     if (heroAudioOn) {
       engineAudio.setTopology(car.topology);
     }
     if (scrollToStudio && studioSectionRef.current) {
       studioSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
+  };
+
+  const jumpToPov = (povId: CameraPovId) => {
+    setStudioMode('studio');
+    setPovRequest((prev) => ({ id: povId, seq: (prev?.seq || 0) + 1 }));
+    studioSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const toggleHeroIgnition = () => {
@@ -65,8 +61,6 @@ export function App() {
       setHeroAudioOn(true);
     }
   };
-
-  const heroParallaxScale = 1 + Math.min(0.09, scrollY * 0.00014);
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-void)' }}>
@@ -121,11 +115,11 @@ export function App() {
       {/* Hero Editorial Stage */}
       <section className="hero-section">
         <div className="hero-backdrop">
-          <img
-            src={activeCar.heroImage}
-            alt={`Aston Martin ${activeCar.name}`}
-            className="hero-backdrop-img"
-            style={{ transform: `scale(${heroParallaxScale.toFixed(4)})` }}
+          <Hero3DStage
+            car={activeCar}
+            paint={activePaint}
+            caliper={activeCaliper}
+            cabinTrim={activeCabinTrim}
           />
           <div className="hero-vignette" />
           <div className="hero-grid-overlay" />
@@ -150,18 +144,22 @@ export function App() {
               in every degree.
             </h1>
             <p className="hero-lead">
-              Step inside the Gaydon studio cyclorama. Orbit Aston Martin’s flagship quartet in real-time WebGL2
-              coachwork finishes, inspect carbon-ceramic assemblies, and test live CFD wind-tunnel downforce up to{' '}
-              {activeCar.specs.topSpeedKmh} km/h.
+              Step inside the Gaydon 3D Atelier. Orbit Aston Martin’s flagship quartet from exterior sculpted
+              coachwork right into the driver’s cockpit seat, swing open Swan-Wing doors, and simulate live CFD
+              downforce up to {activeCar.specs.topSpeedKmh} km/h.
             </p>
             <div className="hero-cta-row">
               <button
                 type="button"
                 className="cta-solid"
-                onClick={() => studioSectionRef.current?.scrollIntoView({ behavior: 'smooth' })}
+                onClick={() => jumpToPov('hero-34')}
               >
-                <span>Enter 360° Observatory</span>
+                <span>Enter 360° 3D Observatory</span>
                 <ArrowDownRight size={15} />
+              </button>
+              <button type="button" className="cta-ghost" onClick={() => jumpToPov('driver-eye')}>
+                <Compass size={14} />
+                <span>Step Inside Cockpit</span>
               </button>
               <button type="button" className="cta-ghost" onClick={toggleHeroIgnition}>
                 <Volume2 size={14} />
@@ -200,26 +198,26 @@ export function App() {
         </div>
       </section>
 
-      {/* SECTION 01: INTERACTIVE 360° STUDIO & WIND TUNNEL OBSERVATORY */}
+      {/* SECTION 01: INTERACTIVE 360° 3D EXT/INT OBSERVATORY & WIND TUNNEL */}
       <section id="observatory" ref={studioSectionRef} className="atelier-section">
         <div className="section-header-row">
           <div>
             <div className="section-kicker">
               <Compass size={13} />
-              <span>01 // 360° STUDIO OBSERVATORY</span>
+              <span>01 // 360° 3D EXTERIOR &amp; COCKPIT OBSERVATORY</span>
             </div>
             <h2 className="section-heading">
-              Inspect every surface, <em>airflow &amp; finish</em>.
+              Orbit outside, step <em>inside the cabin</em>.
             </h2>
           </div>
           <p className="section-subcopy">
-            Drag to rotate inside the dark obsidian studio, apply bespoke Q metallic paint coats in real time, or enter
-            the Three.js wind-tunnel to examine underfloor Venturi aerodynamics.
+            Switch seamlessly across 8 exterior and cockpit camera POVs, articulate the Swan-Wing doors, tailor Q
+            clearcoat &amp; Bridge of Weir leather, or test real-time CFD wind-tunnel aero.
           </p>
         </div>
 
         <div className="studio-shell">
-          {/* Left Main Interactive Stage */}
+          {/* Left Main Interactive 3D Stage */}
           <div className="studio-stage-column">
             <div className="studio-topbar">
               <div className="model-selector-tabs" role="tablist" aria-label="Select Aston Martin Model">
@@ -232,7 +230,7 @@ export function App() {
                     className={`model-tab ${car.id === activeCar.id ? 'active' : ''}`}
                     onClick={() => selectCar(car, false)}
                   >
-                    <span className="model-tab-code">{car.isClosed360 ? '360° ORBIT' : '180° + 3D'}</span>
+                    <span className="model-tab-code">360° 3D · EXT+INT</span>
                     <span className="model-tab-name">{car.name}</span>
                   </button>
                 ))}
@@ -247,7 +245,7 @@ export function App() {
                   onClick={() => setStudioMode('studio')}
                 >
                   <Box size={12} />
-                  <span>Studio Orbit</span>
+                  <span>3D POVs</span>
                 </button>
                 <button
                   type="button"
@@ -257,7 +255,7 @@ export function App() {
                   onClick={() => setStudioMode('aero')}
                 >
                   <Wind size={12} />
-                  <span>360° 3D Aero</span>
+                  <span>CFD Wind Tunnel</span>
                 </button>
                 <button
                   type="button"
@@ -267,28 +265,27 @@ export function App() {
                   onClick={() => setStudioMode('cabin')}
                 >
                   <Layers size={12} />
-                  <span>Saddlery &amp; Chassis</span>
+                  <span>Saddlery Spec</span>
                 </button>
               </div>
             </div>
 
-            {studioMode === 'studio' && (
-              <Turntable360Stage
+            {studioMode !== 'cabin' ? (
+              <Observatory3DStage
                 car={activeCar}
                 paint={activePaint}
-                azimuth={azimuth}
-                onAzimuthChange={setAzimuth}
-                selectedHotspot={selectedHotspot}
-                onSelectHotspot={setSelectedHotspot}
-                onSwitchTo3DAero={() => setStudioMode('aero')}
+                caliper={activeCaliper}
+                cabinTrim={activeCabinTrim}
+                mode={studioMode === 'aero' ? 'aero' : 'studio'}
+                povRequest={povRequest}
+              />
+            ) : (
+              <ChassisCabinLab
+                car={activeCar}
+                cabinTrim={activeCabinTrim}
+                onSitInsidePov={() => jumpToPov('driver-eye')}
               />
             )}
-
-            {studioMode === 'aero' && (
-              <AeroWindTunnel3D car={activeCar} paint={activePaint} caliper={activeCaliper} />
-            )}
-
-            {studioMode === 'cabin' && <ChassisCabinLab car={activeCar} cabinTrim={activeCabinTrim} />}
           </div>
 
           {/* Right Bespoke Q Configurator & Telemetry Rail */}
@@ -434,9 +431,7 @@ export function App() {
                 <img src={car.heroImage} alt={`Aston Martin ${car.name}`} loading="lazy" />
                 <div className="lineup-badge-row">
                   <span className="lineup-tag">{car.category}</span>
-                  <span className="lineup-360-pill">
-                    {car.isClosed360 ? '360° Studio + 3D Aero' : 'Studio Arc + 360° 3D'}
-                  </span>
+                  <span className="lineup-360-pill">360° 3D + Cockpit POV</span>
                 </div>
               </div>
 
