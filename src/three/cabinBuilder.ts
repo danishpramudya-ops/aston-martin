@@ -7,69 +7,146 @@ export interface Cabin3DResult {
   group: THREE.Group;
   updateTrim: (trim: QCabinTrim) => void;
   setLightsMode: (nightMode: boolean) => void;
+  setCockpitSurroundVisible: (visible: boolean) => void;
   dispose: () => void;
 }
 
 function createInfotainmentTexture(car: AstonCar, stitchHex: string): THREE.CanvasTexture {
+  const w = 512;
+  const h = 384;
   const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 192;
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext('2d')!;
 
-  ctx.fillStyle = '#070a09';
-  ctx.fillRect(0, 0, 256, 192);
-  ctx.strokeStyle = 'rgba(200, 169, 110, 0.48)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(4, 4, 248, 184);
+  ctx.fillStyle = '#050807';
+  ctx.fillRect(0, 0, w, h);
 
+  // Subtle radial glow
+  const g = ctx.createRadialGradient(w * 0.5, h * 0.45, 20, w * 0.5, h * 0.45, 260);
+  g.addColorStop(0, 'rgba(0, 82, 48, 0.34)');
+  g.addColorStop(1, 'rgba(5, 8, 7, 0.98)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.strokeStyle = 'rgba(200, 169, 110, 0.52)';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(6, 6, w - 12, h - 12);
+
+  // Top Header Bar
   ctx.fillStyle = '#c8a96e';
-  ctx.font = 'bold 12px monospace';
-  ctx.fillText('ASTON MARTIN // HMI', 16, 26);
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('ASTON MARTIN // GAYDON HMI 2.4', 24, 38);
+  ctx.fillStyle = '#c4d600';
+  ctx.textAlign = 'right';
+  ctx.fillText('5G // GPS LOCK', w - 24, 38);
+  ctx.textAlign = 'left';
 
-  ctx.strokeStyle = '#00482b';
-  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+  ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(32, 130);
-  ctx.bezierCurveTo(60, 62, 140, 56, 172, 110);
-  ctx.bezierCurveTo(195, 148, 224, 92, 222, 74);
+  ctx.moveTo(20, 52);
+  ctx.lineTo(w - 20, 52);
+  ctx.stroke();
+
+  // Navigation / Telemetry Circuit Map Panel
+  ctx.fillStyle = 'rgba(10, 18, 15, 0.85)';
+  ctx.fillRect(24, 66, w - 48, 168);
+  ctx.strokeStyle = 'rgba(200, 169, 110, 0.25)';
+  ctx.strokeRect(24, 66, w - 48, 168);
+
+  // Grid lines inside map
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+  for (let gx = 64; gx < w - 30; gx += 48) {
+    ctx.beginPath();
+    ctx.moveTo(gx, 66);
+    ctx.lineTo(gx, 234);
+    ctx.stroke();
+  }
+  for (let gy = 96; gy < 234; gy += 36) {
+    ctx.beginPath();
+    ctx.moveTo(24, gy);
+    ctx.lineTo(w - 24, gy);
+    ctx.stroke();
+  }
+
+  // Silverstone / Gaydon Proving Ground circuit trace
+  ctx.strokeStyle = '#005a36';
+  ctx.lineWidth = 10;
+  ctx.beginPath();
+  ctx.moveTo(64, 198);
+  ctx.bezierCurveTo(110, 92, 240, 84, 310, 152);
+  ctx.bezierCurveTo(365, 206, 435, 134, 442, 102);
   ctx.stroke();
 
   ctx.strokeStyle = stitchHex;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 3;
   ctx.stroke();
 
+  // Position beacon
+  ctx.fillStyle = '#c4d600';
+  ctx.beginPath();
+  ctx.arc(310, 152, 7, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Bottom Telemetry & Bowers & Wilkins / Climate Bar
   ctx.fillStyle = '#f4f2ec';
-  ctx.font = 'bold 16px monospace';
-  ctx.fillText(`${car.specs.powerPS} PS`, 18, 166);
-  ctx.fillStyle = '#9aa39d';
-  ctx.font = '11px monospace';
-  ctx.fillText(`AERO ${car.aero.maxDownforceKg} KG`, 132, 166);
+  ctx.font = 'bold 26px monospace';
+  ctx.fillText(`${car.specs.powerPS} PS`, 26, 276);
+  ctx.fillStyle = '#c8a96e';
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText(`AERO ${car.aero.maxDownforceKg} KG`, 190, 276);
+  ctx.fillStyle = '#c4d600';
+  ctx.fillText(`${car.specs.torqueNm} NM`, 375, 276);
+
+  // Dual-zone climate & B&W Audio strip
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.fillRect(24, 298, w - 48, 62);
+  ctx.fillStyle = '#f4f2ec';
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText('20.5°C', 42, 336);
+  ctx.fillStyle = '#c8a96e';
+  ctx.font = '16px monospace';
+  ctx.fillText('BOWERS & WILKINS // STUDIO', 142, 335);
+  ctx.fillStyle = '#f4f2ec';
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText('21.0°C', w - 114, 336);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
   return tex;
 }
 
 function createSideCameraMirrorTexture(isLeft: boolean): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
-  canvas.width = 128;
-  canvas.height = 96;
+  canvas.width = 256;
+  canvas.height = 192;
   const ctx = canvas.getContext('2d')!;
 
-  const g = ctx.createLinearGradient(0, 0, 0, 96);
-  g.addColorStop(0, '#0d1412');
-  g.addColorStop(0.5, '#1a2422');
-  g.addColorStop(1, '#090b0a');
+  const g = ctx.createLinearGradient(0, 0, 0, 192);
+  g.addColorStop(0, '#0d1614');
+  g.addColorStop(0.52, '#1d2b28');
+  g.addColorStop(0.55, '#111615');
+  g.addColorStop(1, '#070908');
   ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 128, 96);
+  ctx.fillRect(0, 0, 256, 192);
 
-  ctx.strokeStyle = 'rgba(196, 214, 0, 0.6)';
+  // Horizon perspective lines
+  ctx.strokeStyle = 'rgba(200, 169, 110, 0.35)';
   ctx.lineWidth = 2;
-  ctx.strokeRect(2, 2, 124, 92);
+  ctx.beginPath();
+  ctx.moveTo(isLeft ? 220 : 36, 102);
+  ctx.lineTo(isLeft ? 20 : 236, 178);
+  ctx.stroke();
 
-  ctx.fillStyle = '#9aa39d';
-  ctx.font = 'bold 10px monospace';
-  ctx.fillText(isLeft ? 'CAM L // CLR' : 'CAM R // CLR', 10, 18);
+  ctx.strokeStyle = 'rgba(196, 214, 0, 0.65)';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(4, 4, 248, 184);
+
+  ctx.fillStyle = '#c4d600';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText(isLeft ? 'CAM L // REAR CLEAR' : 'CAM R // REAR CLEAR', 18, 30);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -179,9 +256,14 @@ function buildSculptedSeat(
 export function buildCabin3D(
   car: AstonCar,
   bp: Car3DBlueprint,
-  initialTrim: QCabinTrim
+  initialTrim: QCabinTrim,
+  paintMat?: THREE.Material,
+  glassMat?: THREE.Material
 ): Cabin3DResult {
   const group = new THREE.Group();
+  const surroundGroup = new THREE.Group();
+  surroundGroup.visible = false;
+  group.add(surroundGroup);
   const { map: carbonMap, bumpMap: carbonBump } = getCarbonFiberTextures();
   const texturesToDispose: THREE.Texture[] = [];
 
@@ -576,6 +658,219 @@ export function buildCabin3D(
   mirrorHead.position.set(0, bp.windscreenTopY - 0.075, bp.windscreenTopZ + 0.045);
   group.add(mirrorStem, mirrorHead);
 
+  // 8. Close-Up Cockpit Surround Architecture (A-Pillars, Windscreen Header, Door Cards & Painted Front Hood/Fenders)
+  const extPaintMat = paintMat ?? leatherSmoothMat;
+  const extGlassMat =
+    glassMat ??
+    new THREE.MeshPhysicalMaterial({
+      color: '#0d1311',
+      transparent: true,
+      opacity: 0.18,
+      roughness: 0.04,
+      clearcoat: 1,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+
+  // Left & Right Sculpted Alcantara A-Pillars
+  const roofHalfW = bp.cabinHalfW * 0.88;
+  const roofPeakY = bp.H;
+  const zNose = -bp.L * 0.5;
+  [-1, 1].forEach((side) => {
+    const pStart = new THREE.Vector3(
+      side * (bp.cabinHalfW - 0.01),
+      bp.windscreenBottomY - 0.01,
+      bp.windscreenBottomZ + 0.02
+    );
+    const pMid = new THREE.Vector3(
+      side * (bp.cabinHalfW * 0.93),
+      (bp.windscreenBottomY + bp.windscreenTopY) * 0.52,
+      (bp.windscreenBottomZ + bp.windscreenTopZ) * 0.5 - 0.02
+    );
+    const pEnd = new THREE.Vector3(
+      side * (roofHalfW - 0.01),
+      bp.windscreenTopY + 0.01,
+      bp.windscreenTopZ + 0.02
+    );
+    const aCurve = new THREE.CatmullRomCurve3([pStart, pMid, pEnd]);
+    const aGeo = new THREE.TubeGeometry(aCurve, 18, 0.032, 10, false);
+    const aMesh = new THREE.Mesh(aGeo, alcantaraMat);
+    surroundGroup.add(aMesh);
+
+    // Side roof cantrail sweeping back from top of A-pillar
+    const cantRail = new THREE.CatmullRomCurve3([
+      pEnd,
+      new THREE.Vector3(side * (roofHalfW - 0.01), roofPeakY, (bp.windscreenTopZ + bp.roofRearZ) * 0.5),
+      new THREE.Vector3(side * (roofHalfW * 0.94), bp.roofRearY, bp.roofRearZ),
+    ]);
+    const cantMesh = new THREE.Mesh(new THREE.TubeGeometry(cantRail, 14, 0.028, 8, false), alcantaraMat);
+    surroundGroup.add(cantMesh);
+
+    // Sculpted Inner Door Card with Quilted Leather, Armrest, B&W Speaker & Ambient Light Blade
+    const doorLen = bp.seatBackZ - bp.dashZ + 0.28;
+    const doorHeight = bp.windscreenBottomY - bp.cabinFloorY - 0.02;
+    const doorZ = (bp.dashZ + bp.seatBackZ) * 0.5 + 0.04;
+    const doorX = side * (bp.cabinHalfW + 0.048);
+
+    const doorPanel = new THREE.Mesh(
+      new THREE.BoxGeometry(0.055, doorHeight, doorLen),
+      leatherMat
+    );
+    doorPanel.position.set(doorX, bp.cabinFloorY + doorHeight * 0.5, doorZ);
+    surroundGroup.add(doorPanel);
+
+    // Upper carbon door waist rail
+    const waistRail = new THREE.Mesh(
+      new THREE.BoxGeometry(0.068, 0.055, doorLen * 0.96),
+      carbonMat
+    );
+    waistRail.position.set(doorX - side * 0.006, bp.windscreenBottomY - 0.025, doorZ);
+    surroundGroup.add(waistRail);
+
+    // Ambient LED door blade
+    const doorLed = new THREE.Mesh(
+      new THREE.BoxGeometry(0.008, 0.006, doorLen * 0.78),
+      ambientLightMat
+    );
+    doorLed.position.set(doorX - side * 0.032, bp.windscreenBottomY - 0.065, doorZ);
+    surroundGroup.add(doorLed);
+
+    // Contoured leather door armrest + brushed alloy pull handle
+    const armrest = new THREE.Mesh(
+      new THREE.BoxGeometry(0.085, 0.042, doorLen * 0.52),
+      leatherSmoothMat
+    );
+    armrest.position.set(doorX - side * 0.036, bp.cabinFloorY + doorHeight * 0.52, doorZ + 0.04);
+    surroundGroup.add(armrest);
+
+    const doorPull = new THREE.Mesh(
+      new THREE.BoxGeometry(0.018, 0.024, 0.14),
+      metalMat
+    );
+    doorPull.position.set(doorX - side * 0.042, bp.windscreenBottomY - 0.11, bp.dashZ + 0.26);
+    surroundGroup.add(doorPull);
+
+    // Bowers & Wilkins stainless circular speaker grille in lower front door
+    const bwSpeaker = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.075, 0.075, 0.012, 24),
+      metalMat
+    );
+    bwSpeaker.rotation.z = Math.PI / 2;
+    bwSpeaker.position.set(doorX - side * 0.028, bp.cabinFloorY + 0.18, bp.dashZ + 0.18);
+    surroundGroup.add(bwSpeaker);
+
+    // Exterior Aerodynamic Wing Mirror visible outside the side window
+    const mirrorArm = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.022, 0.035), carbonMat);
+    mirrorArm.position.set(
+      side * (bp.cabinHalfW + 0.11),
+      bp.windscreenBottomY + 0.03,
+      bp.windscreenBottomZ + 0.18
+    );
+    const wingMirrorCap = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.082, 0.095), extPaintMat);
+    wingMirrorCap.position.set(
+      side * (bp.cabinHalfW + 0.19),
+      bp.windscreenBottomY + 0.055,
+      bp.windscreenBottomZ + 0.18
+    );
+    surroundGroup.add(mirrorArm, wingMirrorCap);
+  });
+
+  // Windscreen Top Header Bar & Sunvisors
+  const headerBar = new THREE.Mesh(
+    new THREE.BoxGeometry(roofHalfW * 1.98, 0.048, 0.11),
+    alcantaraMat
+  );
+  headerBar.position.set(0, bp.windscreenTopY + 0.008, bp.windscreenTopZ + 0.03);
+  surroundGroup.add(headerBar);
+
+  [-0.27, 0.27].forEach((vx) => {
+    const visor = new THREE.Mesh(
+      new THREE.BoxGeometry(0.28, 0.014, 0.11),
+      alcantaraMat
+    );
+    visor.position.set(vx, bp.windscreenTopY - 0.016, bp.windscreenTopZ + 0.06);
+    visor.rotation.x = 0.18;
+    surroundGroup.add(visor);
+  });
+
+  // Acoustic Windscreen Glass Panel
+  const wsHeight = Math.hypot(
+    bp.windscreenTopY - bp.windscreenBottomY,
+    bp.windscreenTopZ - bp.windscreenBottomZ
+  );
+  const wsAngle = Math.atan2(
+    bp.windscreenTopZ - bp.windscreenBottomZ,
+    bp.windscreenTopY - bp.windscreenBottomY
+  );
+  const wsGlass = new THREE.Mesh(
+    new THREE.PlaneGeometry(bp.cabinHalfW * 1.9, wsHeight),
+    extGlassMat
+  );
+  wsGlass.position.set(
+    0,
+    (bp.windscreenBottomY + bp.windscreenTopY) * 0.5,
+    (bp.windscreenBottomZ + bp.windscreenTopZ) * 0.5
+  );
+  wsGlass.rotation.x = wsAngle;
+  surroundGroup.add(wsGlass);
+
+  // Sculpted Painted Front Bonnet / Hood & Muscular Front Fender Crests visible through windscreen
+  const hoodLen = Math.abs(zNose * 0.82 - bp.windscreenBottomZ);
+  const hoodCenterZ = (bp.windscreenBottomZ + zNose * 0.82) * 0.5;
+  const hoodCenter = new THREE.Mesh(
+    new THREE.BoxGeometry(bp.cabinHalfW * 1.45, 0.06, hoodLen),
+    extPaintMat
+  );
+  hoodCenter.position.set(0, bp.windscreenBottomY - 0.075, hoodCenterZ);
+  hoodCenter.rotation.x = 0.085;
+  surroundGroup.add(hoodCenter);
+
+  // Raised center power bulge & carbon hood extractor vents
+  const powerBulge = new THREE.Mesh(
+    new THREE.BoxGeometry(bp.cabinHalfW * 0.62, 0.045, hoodLen * 0.82),
+    extPaintMat
+  );
+  powerBulge.position.set(0, bp.windscreenBottomY - 0.052, hoodCenterZ + 0.04);
+  powerBulge.rotation.x = 0.08;
+  surroundGroup.add(powerBulge);
+
+  [-1, 1].forEach((side) => {
+    // Muscular front fender haunches flanking the hood
+    const fenderCrest = new THREE.Mesh(
+      new THREE.BoxGeometry(0.28, 0.085, hoodLen * 0.92),
+      extPaintMat
+    );
+    fenderCrest.position.set(
+      side * (bp.cabinHalfW * 0.82),
+      bp.windscreenBottomY - 0.042,
+      hoodCenterZ + 0.02
+    );
+    fenderCrest.rotation.x = 0.075;
+    fenderCrest.rotation.z = -side * 0.12;
+    surroundGroup.add(fenderCrest);
+
+    // Carbon fiber bonnet louvre vent
+    const hoodVent = new THREE.Mesh(
+      new THREE.BoxGeometry(0.14, 0.018, 0.34),
+      carbonMat
+    );
+    hoodVent.position.set(
+      side * 0.32,
+      bp.windscreenBottomY - 0.042,
+      hoodCenterZ - 0.05
+    );
+    hoodVent.rotation.x = 0.085;
+    surroundGroup.add(hoodVent);
+  });
+
+  // Windscreen base wiper cowl in satin carbon
+  const wiperCowl = new THREE.Mesh(
+    new THREE.BoxGeometry(bp.cabinHalfW * 1.96, 0.036, 0.14),
+    carbonMat
+  );
+  wiperCowl.position.set(0, bp.windscreenBottomY - 0.015, bp.windscreenBottomZ - 0.04);
+  surroundGroup.add(wiperCowl);
+
   return {
     group,
     updateTrim: (trim: QCabinTrim) => {
@@ -596,6 +891,9 @@ export function buildCabin3D(
       ambientLightMat.emissiveIntensity = nightMode ? 1.55 : 0.55;
       crystalStartMat.emissiveIntensity = nightMode ? 1.85 : 0.72;
       accentStitchMat.emissiveIntensity = nightMode ? 0.34 : 0.16;
+    },
+    setCockpitSurroundVisible: (visible: boolean) => {
+      surroundGroup.visible = visible;
     },
     dispose: () => {
       leatherTextures.map.dispose();

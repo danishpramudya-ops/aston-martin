@@ -316,84 +316,140 @@ export function createLeatherTextures(
  * Generates an illuminated OLED digital instrument cluster and HMI center screen texture.
  */
 export function createClusterTexture(car: AstonCar, nightMode: boolean): THREE.CanvasTexture {
-  const w = 512;
-  const h = 192;
+  const w = 1024;
+  const h = 384;
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext('2d')!;
 
-  ctx.fillStyle = '#050807';
+  ctx.fillStyle = '#040706';
   ctx.fillRect(0, 0, w, h);
 
   // Subtle green-emerald ambient bezel gradient
-  const grad = ctx.createRadialGradient(w / 2, h / 2, 20, w / 2, h / 2, 260);
-  grad.addColorStop(0, nightMode ? 'rgba(0, 72, 43, 0.45)' : 'rgba(0, 72, 43, 0.25)');
-  grad.addColorStop(1, 'rgba(5, 8, 7, 0.96)');
+  const grad = ctx.createRadialGradient(w / 2, h / 2, 30, w / 2, h / 2, 520);
+  grad.addColorStop(0, nightMode ? 'rgba(0, 96, 58, 0.42)' : 'rgba(0, 72, 43, 0.28)');
+  grad.addColorStop(0.6, 'rgba(6, 12, 10, 0.92)');
+  grad.addColorStop(1, 'rgba(3, 5, 4, 0.98)');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
 
-  // Outer frame
-  ctx.strokeStyle = 'rgba(200, 169, 110, 0.45)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(4, 4, w - 8, h - 8);
+  // Outer precision bezel
+  ctx.strokeStyle = 'rgba(200, 169, 110, 0.55)';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(8, 8, w - 16, h - 16);
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(16, 16, w - 32, h - 32);
 
-  // Tachometer arc (center)
+  // Center Tachometer Ring + Tick Marks
   const cx = w * 0.5;
-  const cy = h * 0.58;
-  const r = 64;
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
-  ctx.lineWidth = 7;
+  const cy = h * 0.54;
+  const r = 136;
+
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
+  ctx.lineWidth = 14;
   ctx.beginPath();
-  ctx.arc(cx, cy, r, Math.PI * 0.78, Math.PI * 2.22);
+  ctx.arc(cx, cy, r, Math.PI * 0.76, Math.PI * 2.24);
   ctx.stroke();
 
-  // Active Lime rev arc + redline tip
+  // Active Lime rev arc + redline zone
   ctx.strokeStyle = '#c4d600';
-  ctx.lineWidth = 7;
+  ctx.lineWidth = 14;
   ctx.beginPath();
-  ctx.arc(cx, cy, r, Math.PI * 0.78, Math.PI * 1.42);
+  ctx.arc(cx, cy, r, Math.PI * 0.76, Math.PI * 1.54);
   ctx.stroke();
 
   ctx.strokeStyle = '#e03e3e';
-  ctx.lineWidth = 7;
+  ctx.lineWidth = 14;
   ctx.beginPath();
-  ctx.arc(cx, cy, r, Math.PI * 1.96, Math.PI * 2.22);
+  ctx.arc(cx, cy, r, Math.PI * 1.94, Math.PI * 2.24);
   ctx.stroke();
 
-  // Center gear + RPM readout
+  // Radial tick marks around tachometer
+  for (let i = 0; i <= 24; i++) {
+    const a = (0.76 + (i / 24) * 1.48) * Math.PI;
+    const isMajor = i % 3 === 0;
+    const r0 = r - (isMajor ? 24 : 16);
+    const r1 = r - 8;
+    ctx.strokeStyle = i >= 20 ? '#e03e3e' : isMajor ? '#f4f2ec' : 'rgba(244,242,236,0.4)';
+    ctx.lineWidth = isMajor ? 3 : 1.5;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
+    ctx.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
+    ctx.stroke();
+  }
+
+  // Center gear + speed + RPM readout
   ctx.fillStyle = '#f4f2ec';
-  ctx.font = 'bold 40px monospace';
+  ctx.font = 'bold 76px monospace';
   ctx.textAlign = 'center';
-  ctx.fillText('N', cx, cy + 4);
+  ctx.fillText('1', cx, cy - 6);
+
+  ctx.fillStyle = '#c4d600';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText('READY // LAUNCH', cx, cy + 32);
 
   ctx.fillStyle = '#c8a96e';
-  ctx.font = '12px monospace';
-  ctx.fillText(`${car.specs.redlineRpm.toLocaleString()} RPM`, cx, cy + 28);
+  ctx.font = '20px monospace';
+  ctx.fillText(`REDLINE ${car.specs.redlineRpm.toLocaleString()} RPM`, cx, cy + 68);
 
-  // Left panel: Drive mode & Powertrain
+  // Left Wing: Drive Mode, Power & Tire Telemetry
   ctx.textAlign = 'left';
   ctx.fillStyle = '#c4d600';
-  ctx.font = 'bold 14px monospace';
-  ctx.fillText('TRACK // SPORT+', 24, 38);
+  ctx.font = 'bold 24px monospace';
+  ctx.fillText('GT // TRACK+', 42, 64);
 
-  ctx.fillStyle = '#a0a8a3';
-  ctx.font = '12px monospace';
-  ctx.fillText(car.chassisCode, 24, 62);
-  ctx.fillText(`PEAK ${car.specs.powerPS} PS`, 24, 152);
+  ctx.fillStyle = '#f4f2ec';
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText(`${car.chassisCode} // ${car.specs.powerPS} PS`, 42, 102);
 
-  // Right panel: Oil / Aero / Brake status
+  ctx.fillStyle = '#9aa39d';
+  ctx.font = '18px monospace';
+  ctx.fillText('FL 2.3 BAR  68°C', 42, 175);
+  ctx.fillText('FR 2.3 BAR  69°C', 42, 206);
+  ctx.fillText('RL 2.4 BAR  74°C', 42, 248);
+  ctx.fillText('RR 2.4 BAR  74°C', 42, 279);
+
+  ctx.fillStyle = '#c8a96e';
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText(`0-100 KM/H: ${car.specs.zeroToHundred}`, 42, 336);
+
+  // Right Wing: Vehicle Identity, Thermal & G-Force Meter
   ctx.textAlign = 'right';
   ctx.fillStyle = '#f4f2ec';
-  ctx.font = 'bold 16px monospace';
-  ctx.fillText(car.name.toUpperCase(), w - 24, 38);
+  ctx.font = 'bold 26px monospace';
+  ctx.fillText(car.name.toUpperCase(), w - 42, 64);
+
+  ctx.fillStyle = '#c8a96e';
+  ctx.font = '18px monospace';
+  ctx.fillText(`VMAX ${car.specs.topSpeedKmh} KM/H`, w - 42, 102);
+
+  // G-Force target circle on right wing
+  const gx = w - 135;
+  const gy = 212;
+  ctx.strokeStyle = 'rgba(200, 169, 110, 0.42)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(gx, gy, 48, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(gx, gy, 24, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = '#c4d600';
+  ctx.beginPath();
+  ctx.arc(gx + 8, gy - 6, 6, 0, Math.PI * 2);
+  ctx.fill();
 
   ctx.fillStyle = '#a0a8a3';
-  ctx.font = '12px monospace';
-  ctx.fillText('OIL 94°C', w - 24, 130);
-  ctx.fillText('CCM 145°C', w - 24, 152);
+  ctx.font = '18px monospace';
+  ctx.fillText('OIL 94°C // H2O 88°C', w - 42, 304);
+  ctx.fillStyle = '#c4d600';
+  ctx.fillText(`AERO ${car.aero.maxDownforceKg} KG`, w - 42, 336);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
   return tex;
 }
+

@@ -165,9 +165,13 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
 
     if (spec.zone === 'interior') {
       setAutoOrbit(false);
+    } else {
+      car3dRef.current?.setInteriorMode(false);
     }
     if (spec.autoOpenDoors) {
       setDoorsOpen(true);
+    } else {
+      setDoorsOpen(false);
     }
 
     // Relax OrbitControls constraints during inter-zone camera flight
@@ -328,6 +332,7 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
     povsRef.current = povs;
     const startPov = povs.find((p) => p.id === activePovId) || povs[0];
     activePovRef.current = startPov;
+    car3d.setInteriorMode(startPov.zone === 'interior');
 
     const camera = new THREE.PerspectiveCamera(
       startPov.fov,
@@ -393,6 +398,9 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
       const fly = flyStateRef.current;
       if (fly.active && fly.toSpec) {
         fly.t = Math.min(1, fly.t + dt * 1.45);
+        if (fly.t >= 0.45) {
+          car3d.setInteriorMode(fly.toSpec.zone === 'interior');
+        }
         // easeInOutCubic
         const e =
           fly.t < 0.5 ? 4 * fly.t * fly.t * fly.t : 1 - Math.pow(-2 * fly.t + 2, 3) / 2;
@@ -404,6 +412,7 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
 
         if (fly.t >= 1) {
           fly.active = false;
+          car3d.setInteriorMode(fly.toSpec.zone === 'interior');
           controls.minDistance = fly.toSpec.minDistance;
           controls.maxDistance = fly.toSpec.maxDistance;
           controls.minPolarAngle = fly.toSpec.minPolarAngle;
