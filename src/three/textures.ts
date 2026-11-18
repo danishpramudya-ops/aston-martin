@@ -3,108 +3,53 @@ import type { AstonCar } from '../data/cars';
 
 let cachedCarbonColor: THREE.CanvasTexture | null = null;
 let cachedCarbonBump: THREE.CanvasTexture | null = null;
-let cachedFlakeNormal: THREE.DataTexture | null = null;
 let cachedRotorColor: THREE.CanvasTexture | null = null;
 let cachedRotorBump: THREE.CanvasTexture | null = null;
 
-/**
- * Generates a high-contrast Gaydon studio cyclorama PMREM environment map
- * with overhead strip softboxes and warm champagne horizon accents so
- * metallic clearcoat coachwork catches authentic studio specular ribbons.
- */
-export function createStudioEnvironment(renderer: THREE.WebGLRenderer): THREE.Texture {
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  pmrem.compileEquirectangularShader();
-
-  const envScene = new THREE.Scene();
-  envScene.background = new THREE.Color('#060807');
-
-  // Overhead primary longitudinal strip-box diffusers (creates classic automotive crease highlights)
-  const stripMatMain = new THREE.MeshBasicMaterial({ color: new THREE.Color(6.2, 6.3, 6.4), side: THREE.DoubleSide });
-  const stripMainLeft = new THREE.Mesh(new THREE.PlaneGeometry(16, 1.4), stripMatMain);
-  stripMainLeft.position.set(-2.2, 6.5, 0);
-  stripMainLeft.rotation.x = Math.PI / 2;
-  stripMainLeft.rotation.y = 0.28;
-  envScene.add(stripMainLeft);
-
-  const stripMainRight = new THREE.Mesh(new THREE.PlaneGeometry(16, 1.4), stripMatMain);
-  stripMainRight.position.set(2.2, 6.5, 0);
-  stripMainRight.rotation.x = Math.PI / 2;
-  stripMainRight.rotation.y = -0.28;
-  envScene.add(stripMainRight);
-
-  // Overhead central soft fill canopy
-  const canopyMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.9, 2.0, 2.1), side: THREE.DoubleSide });
-  const canopy = new THREE.Mesh(new THREE.PlaneGeometry(14, 7), canopyMat);
-  canopy.position.set(0, 7.8, 0);
-  canopy.rotation.x = Math.PI / 2;
-  envScene.add(canopy);
-
-  // Subtle side kicker light panels (brings out haunches & door coves)
-  const warmMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.4, 2.0, 1.45), side: THREE.DoubleSide });
-  const sideWarm = new THREE.Mesh(new THREE.PlaneGeometry(12, 2.2), warmMat);
-  sideWarm.position.set(-8.5, 2.1, -1.5);
-  sideWarm.rotation.y = Math.PI / 2;
-  envScene.add(sideWarm);
-
-  const coolMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.75, 2.0, 2.25), side: THREE.DoubleSide });
-  const sideCool = new THREE.Mesh(new THREE.PlaneGeometry(12, 2.2), coolMat);
-  sideCool.position.set(8.5, 2.3, 1.2);
-  sideCool.rotation.y = -Math.PI / 2;
-  envScene.add(sideCool);
-
-  // Horizon floor bounce ring
-  const floorBounce = new THREE.Mesh(
-    new THREE.CircleGeometry(18, 48),
-    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.11, 0.13, 0.12), side: THREE.DoubleSide })
-  );
-  floorBounce.position.y = -1.2;
-  floorBounce.rotation.x = -Math.PI / 2;
-  envScene.add(floorBounce);
-
-  const target = pmrem.fromScene(envScene, 0.032);
-  pmrem.dispose();
-
-  stripMainLeft.geometry.dispose();
-  stripMainRight.geometry.dispose();
-  stripMatMain.dispose();
-  canopy.geometry.dispose();
-  canopyMat.dispose();
-  sideWarm.geometry.dispose();
-  warmMat.dispose();
-  sideCool.geometry.dispose();
-  coolMat.dispose();
-  floorBounce.geometry.dispose();
-  (floorBounce.material as THREE.Material).dispose();
-
-  return target.texture;
-}
+let cachedCarbonWeave: THREE.DataTexture | null = null;
 
 /**
- * Subtle metallic flake normal map for Q liquid-metal clearcoat finishes.
+ * 2×2 twill carbon weave for triplanar projection. RGB = tow albedo with a cylindrical crown
+ * highlight and fibre striations; A = tow orientation (warp vs weft), which the carbon shader
+ * turns into alternating roughness so neighbouring tows flash independently as the light moves.
+ * Written as raw RGBA so the alpha channel isn't destroyed by canvas premultiplication.
  */
-export function getFlakeNormalTexture(): THREE.DataTexture {
-  if (cachedFlakeNormal) return cachedFlakeNormal;
-  const size = 128;
+export function getCarbonWeaveTexture(): THREE.DataTexture {
+  if (cachedCarbonWeave) return cachedCarbonWeave;
+  const size = 256;
+  const cells = 8;
+  const cell = size / cells;
   const data = new Uint8Array(size * size * 4);
-  let seed = 1337;
-  const rand = () => {
-    seed = (seed * 16807) % 2147483647;
-    return (seed - 1) / 2147483646;
-  };
-  for (let i = 0; i < size * size; i++) {
-    const idx = i * 4;
-    data[idx] = Math.round(128 + (rand() - 0.5) * 44);
-    data[idx + 1] = Math.round(128 + (rand() - 0.5) * 44);
-    data[idx + 2] = 248;
-    data[idx + 3] = 255;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const ci = Math.floor(x / cell);
+      const cj = Math.floor(y / cell);
+      const warp = (ci + cj) % 4 < 2;
+      const u = (x % cell) / cell;
+      const v = (y % cell) / cell;
+      const across = warp ? v : u;
+      const along = warp ? u : v;
+      const crown = Math.pow(Math.sin(across * Math.PI), 0.55);
+      const fibre = 0.9 + 0.1 * Math.sin((warp ? y : x) * 2.37 + Math.sin(along * 9.0) * 0.6);
+      const dip = 0.82 + 0.18 * Math.sin(along * Math.PI);
+      const l = (warp ? 40 : 30) * (0.42 + 0.58 * crown) * fibre * dip;
+      const i = (y * size + x) * 4;
+      data[i] = Math.round(l);
+      data[i + 1] = Math.round(l * 1.03);
+      data[i + 2] = Math.round(l * 1.08);
+      data[i + 3] = Math.round((warp ? 200 : 60) * (0.6 + 0.4 * crown));
+    }
   }
   const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(22, 22);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = 8;
   tex.needsUpdate = true;
-  cachedFlakeNormal = tex;
+  cachedCarbonWeave = tex;
   return tex;
 }
 
@@ -232,11 +177,14 @@ export function getRotorTextures(): { map: THREE.CanvasTexture; bumpMap: THREE.C
 }
 
 /**
- * Creates a quilted Bridge of Weir leather hide texture paired with contrasting welt stitch.
+ * Creates a Bridge of Weir leather hide texture. With `quilt` (seat inserts of the bespoke cabin)
+ * a contrasting diamond welt stitch is drawn; GLB interiors pass `quilt: false` because their UVs
+ * cover whole dashboards and door cards, where tiled stitching would tint every surface.
  */
 export function createLeatherTextures(
   primaryHex: string,
-  stitchHex: string
+  stitchHex: string,
+  quilt = true
 ): { map: THREE.CanvasTexture; bumpMap: THREE.CanvasTexture } {
   const size = 256;
   const c = document.createElement('canvas');
@@ -274,7 +222,7 @@ export function createLeatherTextures(
   btx.strokeStyle = '#383838';
   btx.lineWidth = 2.0;
 
-  for (let offset = -size; offset < size * 2; offset += step) {
+  for (let offset = -size; quilt && offset < size * 2; offset += step) {
     ctx.beginPath();
     ctx.moveTo(offset, 0);
     ctx.lineTo(offset + size, size);

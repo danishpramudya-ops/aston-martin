@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { AstonCar, QCabinTrim } from '../data/cars';
-import type { Car3DBlueprint } from './carProfiles';
+import { evaluateLowerCoachwork, type Car3DBlueprint } from './carProfiles';
 import { createClusterTexture, createLeatherTextures, getCarbonFiberTextures } from './textures';
 
 export interface Cabin3DResult {
@@ -157,6 +157,56 @@ function createSideCameraMirrorTexture(isLeft: boolean): THREE.CanvasTexture {
  * Builds an ergonomic extruded contoured seat shell with beveled cushion,
  * curved lumbar backrest, integrated headrest, and quilted Bridge of Weir insert.
  */
+/**
+ * Lofts the front bonnet from the windscreen base to the nose. Height follows the car's own
+ * `evaluateLowerCoachwork` deck line (blended into the windscreen base so it meets the cowl),
+ * and each cross-section raises fender pods near the flanks over a softly dished centre.
+ */
+function buildBonnetSurface(bp: Car3DBlueprint, zNose: number): THREE.BufferGeometry {
+  const segZ = 30;
+  const segX = 40;
+  const zStart = bp.windscreenBottomZ - 0.03;
+  const zEnd = zNose * 0.9;
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const smooth = (e0: number, e1: number, x: number) => {
+    const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
+  };
+
+  for (let iz = 0; iz <= segZ; iz++) {
+    const f = iz / segZ;
+    const z = zStart + (zEnd - zStart) * f;
+    const prof = evaluateLowerCoachwork(bp, (z + bp.L * 0.5) / bp.L);
+    const baseY = THREE.MathUtils.lerp(bp.windscreenBottomY - 0.05, prof.deckY, smooth(0.0, 0.35, f));
+    const halfW = Math.min(prof.halfW, bp.W * 0.5) * 0.97;
+    for (let ix = 0; ix <= segX; ix++) {
+      const t = (ix / segX) * 2 - 1;
+      const a = Math.abs(t);
+      const pod = Math.exp(-Math.pow((a - 0.7) / 0.2, 2));
+      const valley = Math.exp(-Math.pow(t / 0.36, 2));
+      const shoulderDrop = Math.pow(Math.max(0, a - 0.88) / 0.12, 2) * 0.16;
+      const y = baseY + pod * 0.065 - valley * 0.045 * smooth(0.15, 0.6, f) - shoulderDrop;
+      positions.push(t * halfW, y, z);
+    }
+  }
+  const row = segX + 1;
+  for (let iz = 0; iz < segZ; iz++) {
+    for (let ix = 0; ix < segX; ix++) {
+      const a = iz * row + ix;
+      const b = a + 1;
+      const c = a + row;
+      const d = c + 1;
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
 function buildSculptedSeat(
   bp: Car3DBlueprint,
   seatW: number,
@@ -766,7 +816,10 @@ export function buildCabin3D(
       bp.windscreenBottomY + 0.03,
       bp.windscreenBottomZ + 0.18
     );
-    const wingMirrorCap = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.082, 0.095), extPaintMat);
+    // Teardrop housing (scaled sphere, tapered toward the tail) instead of a hard-edged block
+    const wingMirrorCap = new THREE.Mesh(new THREE.SphereGeometry(0.5, 28, 18), extPaintMat);
+    wingMirrorCap.scale.set(0.16, 0.078, 0.11);
+    wingMirrorCap.rotation.y = side * 0.12;
     wingMirrorCap.position.set(
       side * (bp.cabinHalfW + 0.19),
       bp.windscreenBottomY + 0.055,
@@ -814,54 +867,10 @@ export function buildCabin3D(
   wsGlass.rotation.x = wsAngle;
   surroundGroup.add(wsGlass);
 
-  // Sculpted Painted Front Bonnet / Hood & Muscular Front Fender Crests visible through windscreen
-  const hoodLen = Math.abs(zNose * 0.82 - bp.windscreenBottomZ);
-  const hoodCenterZ = (bp.windscreenBottomZ + zNose * 0.82) * 0.5;
-  const hoodCenter = new THREE.Mesh(
-    new THREE.BoxGeometry(bp.cabinHalfW * 1.45, 0.06, hoodLen),
-    extPaintMat
-  );
-  hoodCenter.position.set(0, bp.windscreenBottomY - 0.075, hoodCenterZ);
-  hoodCenter.rotation.x = 0.085;
-  surroundGroup.add(hoodCenter);
-
-  // Raised center power bulge & carbon hood extractor vents
-  const powerBulge = new THREE.Mesh(
-    new THREE.BoxGeometry(bp.cabinHalfW * 0.62, 0.045, hoodLen * 0.82),
-    extPaintMat
-  );
-  powerBulge.position.set(0, bp.windscreenBottomY - 0.052, hoodCenterZ + 0.04);
-  powerBulge.rotation.x = 0.08;
-  surroundGroup.add(powerBulge);
-
-  [-1, 1].forEach((side) => {
-    // Muscular front fender haunches flanking the hood
-    const fenderCrest = new THREE.Mesh(
-      new THREE.BoxGeometry(0.28, 0.085, hoodLen * 0.92),
-      extPaintMat
-    );
-    fenderCrest.position.set(
-      side * (bp.cabinHalfW * 0.82),
-      bp.windscreenBottomY - 0.042,
-      hoodCenterZ + 0.02
-    );
-    fenderCrest.rotation.x = 0.075;
-    fenderCrest.rotation.z = -side * 0.12;
-    surroundGroup.add(fenderCrest);
-
-    // Carbon fiber bonnet louvre vent
-    const hoodVent = new THREE.Mesh(
-      new THREE.BoxGeometry(0.14, 0.018, 0.34),
-      carbonMat
-    );
-    hoodVent.position.set(
-      side * 0.32,
-      bp.windscreenBottomY - 0.042,
-      hoodCenterZ - 0.05
-    );
-    hoodVent.rotation.x = 0.085;
-    surroundGroup.add(hoodVent);
-  });
+  // Sculpted painted bonnet seen through the windscreen: one smooth surface lofted from the car's
+  // coachwork profile – twin fender pods either side of a lower centre valley – instead of boxes.
+  const bonnet = new THREE.Mesh(buildBonnetSurface(bp, zNose), extPaintMat);
+  surroundGroup.add(bonnet);
 
   // Windscreen base wiper cowl in satin carbon
   const wiperCowl = new THREE.Mesh(

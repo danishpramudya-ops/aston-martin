@@ -12,10 +12,10 @@ import {
   Wind,
 } from 'lucide-react';
 import type { AstonCar, QCabinTrim, QCaliperFinish, QPaintFinish } from '../data/cars';
-import { buildAstonCar3D, type Car3DInstance } from '../three/buildCar3D';
+import { buildAstonCar3D, preloadCarModel, type Car3DInstance } from '../three/buildCar3D';
 import { getCameraPovsForCar, type CameraPovId, type CameraPovSpec } from '../three/cameraPovs';
 import { evaluateLowerCoachwork, type Car3DBlueprint } from '../three/carProfiles';
-import { createStudioEnvironment } from '../three/textures';
+import { Studio } from '../three/studio';
 
 interface Observatory3DStageProps {
   car: AstonCar;
@@ -26,19 +26,20 @@ interface Observatory3DStageProps {
   povRequest: { id: CameraPovId; seq: number } | null;
 }
 
-function createContactShadowTexture(): THREE.CanvasTexture {
-  const c = document.createElement('canvas');
-  c.width = 256;
-  c.height = 512;
-  const ctx = c.getContext('2d')!;
-  const g = ctx.createRadialGradient(128, 256, 36, 128, 256, 126);
-  g.addColorStop(0, 'rgba(0, 0, 0, 0.94)');
-  g.addColorStop(0.65, 'rgba(0, 0, 0, 0.58)');
-  g.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 256, 512);
-  const tex = new THREE.CanvasTexture(c);
-  return tex;
+interface StreakMeta {
+  laneX: number;
+  zProg: number;
+  baseY: number;
+}
+
+const STREAK_COUNT = 180;
+
+function buildStreakMeta(bp: Car3DBlueprint): StreakMeta[] {
+  return Array.from({ length: STREAK_COUNT }, (_, idx) => ({
+    laneX: ((idx % 10) / 9 - 0.5) * bp.W * 1.14,
+    zProg: Math.random(),
+    baseY: 0.1 + (Math.floor(idx / 10) / 18) * 0.98,
+  }));
 }
 
 function evalStreamY(
@@ -98,16 +99,21 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
   const [autoOrbit, setAutoOrbit] = useState(false);
   const [speedKmh, setSpeedKmh] = useState(260);
   const [brakeStress, setBrakeStress] = useState(false);
+  const [loadingCar, setLoadingCar] = useState(true);
 
+  const studioRef = useRef<Studio | null>(null);
   const car3dRef = useRef<Car3DInstance | null>(null);
   const povsRef = useRef<CameraPovSpec[]>([]);
   const activePovRef = useRef<CameraPovSpec | null>(null);
+  const activePovIdRef = useRef<CameraPovId>('hero-34');
   const controlsRef = useRef<OrbitControls | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const streakMetaRef = useRef<StreakMeta[]>([]);
 
   const flyStateRef = useRef<{
     active: boolean;
     t: number;
+    speed: number;
     fromPos: THREE.Vector3;
     fromTarget: THREE.Vector3;
     fromFov: number;
@@ -115,22 +121,40 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
   }>({
     active: false,
     t: 1,
+    speed: 1.45,
     fromPos: new THREE.Vector3(),
     fromTarget: new THREE.Vector3(),
     fromFov: 35,
     toSpec: null,
   });
 
+  // Latest UI state, readable from the render loop and async car swaps without stale closures.
   const modeRef = useRef(mode);
   const autoOrbitRef = useRef(autoOrbit);
   const speedRef = useRef(speedKmh);
   const brakeStressRef = useRef(brakeStress);
+  const paintRef = useRef(paint);
+  const caliperRef = useRef(caliper);
+  const cabinTrimRef = useRef(cabinTrim);
+  const doorsOpenRef = useRef(doorsOpen);
+  const nightLightsRef = useRef(nightLights);
+  const xrayRef = useRef(xrayMode);
+  paintRef.current = paint;
+  caliperRef.current = caliper;
+  cabinTrimRef.current = cabinTrim;
+  doorsOpenRef.current = doorsOpen;
+  nightLightsRef.current = nightLights;
+  xrayRef.current = xrayMode;
+  activePovIdRef.current = activePovId;
+
+  const brakeThermalFor = (aero: boolean, stress: boolean, kmh: number) =>
+    aero && stress ? 0.5 + (kmh / 360) * 1.6 : 0;
 
   useEffect(() => {
     modeRef.current = mode;
     if (car3dRef.current) {
       car3dRef.current.setActiveAero(mode === 'aero' ? speedRef.current : 0);
-      car3dRef.current.setBrakeThermal(mode === 'aero' && brakeStressRef.current ? 0.5 + (speedRef.current / 360) * 1.6 : 0);
+      car3dRef.current.setBrakeThermal(brakeThermalFor(mode === 'aero', brakeStressRef.current, speedRef.current));
     }
   }, [mode]);
 
@@ -142,23 +166,56 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
     speedRef.current = speedKmh;
     if (car3dRef.current && modeRef.current === 'aero') {
       car3dRef.current.setActiveAero(speedKmh);
-      car3dRef.current.setBrakeThermal(brakeStressRef.current ? 0.5 + (speedKmh / 360) * 1.6 : 0);
+      car3dRef.current.setBrakeThermal(brakeThermalFor(true, brakeStressRef.current, speedKmh));
     }
   }, [speedKmh]);
 
   useEffect(() => {
     brakeStressRef.current = brakeStress;
     if (car3dRef.current && modeRef.current === 'aero') {
-      car3dRef.current.setBrakeThermal(brakeStress ? 0.5 + (speedRef.current / 360) * 1.6 : 0);
+      car3dRef.current.setBrakeThermal(brakeThermalFor(true, brakeStress, speedRef.current));
     }
   }, [brakeStress]);
+
+  /**
+   * Exterior POVs are composed for a 16:9 stage. On narrower viewports (phones, split screens)
+   * the horizontal field of view shrinks, so the camera dollies back along its own sight line
+   * until the car fits again. Cockpit POVs are never moved – they are anchored to the seat.
+   */
+  const framedSpec = (spec: CameraPovSpec, aspect: number): CameraPovSpec => {
+    if (spec.zone === 'interior') return spec;
+    const fit = Math.min(2.4, Math.max(1, 1.62 / Math.max(0.3, aspect)));
+    if (fit === 1) return spec;
+    const position = spec.target.clone().add(spec.position.clone().sub(spec.target).multiplyScalar(fit));
+    return { ...spec, position, maxDistance: spec.maxDistance * fit };
+  };
+
+  /** Starts an eased camera flight toward a POV; `speed` is in flight-fractions per second. */
+  const flyTo = (rawSpec: CameraPovSpec, speed = 1.45) => {
+    const cam = cameraRef.current;
+    const ctrls = controlsRef.current;
+    if (!cam || !ctrls) return;
+    const spec = framedSpec(rawSpec, cam.aspect);
+    // Relax OrbitControls constraints during inter-zone camera flight
+    ctrls.minDistance = 0.04;
+    ctrls.maxDistance = 12.0;
+    ctrls.minPolarAngle = 0.05;
+    ctrls.maxPolarAngle = Math.PI * 0.92;
+    flyStateRef.current = {
+      active: true,
+      t: 0,
+      speed,
+      fromPos: cam.position.clone(),
+      fromTarget: ctrls.target.clone(),
+      fromFov: cam.fov,
+      toSpec: spec,
+    };
+  };
 
   // Helper to initiate silky POV flythrough
   const triggerPovFlight = (povId: CameraPovId) => {
     const spec = povsRef.current.find((p) => p.id === povId) || povsRef.current[0];
-    const cam = cameraRef.current;
-    const ctrls = controlsRef.current;
-    if (!spec || !cam || !ctrls) return;
+    if (!spec) return;
 
     setActivePovId(spec.id);
     activePovRef.current = spec;
@@ -168,26 +225,8 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
     } else {
       car3dRef.current?.setInteriorMode(false);
     }
-    if (spec.autoOpenDoors) {
-      setDoorsOpen(true);
-    } else {
-      setDoorsOpen(false);
-    }
-
-    // Relax OrbitControls constraints during inter-zone camera flight
-    ctrls.minDistance = 0.04;
-    ctrls.maxDistance = 12.0;
-    ctrls.minPolarAngle = 0.05;
-    ctrls.maxPolarAngle = Math.PI * 0.92;
-
-    flyStateRef.current = {
-      active: true,
-      t: 0,
-      fromPos: cam.position.clone(),
-      fromTarget: ctrls.target.clone(),
-      fromFov: cam.fov,
-      toSpec: spec,
-    };
+    setDoorsOpen(Boolean(spec.autoOpenDoors));
+    flyTo(spec);
   };
 
   // Respond cleanly when external components request a specific POV
@@ -229,130 +268,64 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
 
   useEffect(() => {
     car3dRef.current?.setLightsMode(nightLights);
+    studioRef.current?.setNight(nightLights);
   }, [nightLights]);
 
   useEffect(() => {
     car3dRef.current?.setXRay(xrayMode);
   }, [xrayMode]);
 
-  // Main Three.js Scene Initialization & Vehicle Swap Lifecycle
+  // Studio lifecycle: one renderer, environment, floor and post pipeline for the component's life.
   useEffect(() => {
     const el = mountRef.current;
     if (!el) return;
 
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#070908');
-    scene.fog = new THREE.FogExp2('#070908', 0.044);
+    const studio = new Studio(el, { background: '#070908', floorRadius: 14 });
+    studioRef.current = studio;
+    studio.setNight(nightLightsRef.current);
+    const { scene } = studio;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(el.clientWidth, el.clientHeight);
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.18;
-    el.innerHTML = '';
-    el.appendChild(renderer.domElement);
-
-    const envTex = createStudioEnvironment(renderer);
-    scene.environment = envTex;
-
-    // Studio Direct Lighting complementing PMREM Environment
-    scene.add(new THREE.AmbientLight('#dce4e0', 0.55));
-    const keyLight = new THREE.DirectionalLight('#ffffff', 1.65);
-    keyLight.position.set(-4.5, 6.2, -3.5);
-    scene.add(keyLight);
-
-    const rimLight = new THREE.DirectionalLight('#c8a96e', 1.1);
-    rimLight.position.set(5.2, 2.8, 4.5);
-    scene.add(rimLight);
-
-    // Subtle Dark Obsidian Cyclorama Floor & Brass Measuring Ring
-    const floorMat = new THREE.MeshStandardMaterial({
-      color: '#080b0a',
-      roughness: 0.42,
-      metalness: 0.28,
-      envMapIntensity: 0.45,
-    });
-    const floorMesh = new THREE.Mesh(new THREE.CircleGeometry(14, 72), floorMat);
-    floorMesh.rotation.x = -Math.PI / 2;
-    scene.add(floorMesh);
-
-    const brassRingGeo = new THREE.RingGeometry(2.88, 2.9, 96);
+    // Brass measuring ring & inner tick (Gaydon turntable markings)
+    const brassRingGeo = new THREE.RingGeometry(2.88, 2.9, 128);
     brassRingGeo.rotateX(-Math.PI / 2);
     const brassRingMat = new THREE.MeshBasicMaterial({
       color: '#c8a96e',
       transparent: true,
-      opacity: 0.28,
+      opacity: 0.32,
       side: THREE.DoubleSide,
+      depthWrite: false,
     });
     const brassRing = new THREE.Mesh(brassRingGeo, brassRingMat);
     brassRing.position.y = 0.003;
     scene.add(brassRing);
 
-    const innerTickGeo = new THREE.RingGeometry(2.74, 2.75, 96);
+    const innerTickGeo = new THREE.RingGeometry(2.74, 2.75, 128);
     innerTickGeo.rotateX(-Math.PI / 2);
     const innerTickMat = new THREE.MeshBasicMaterial({
       color: '#34403a',
       transparent: true,
-      opacity: 0.45,
+      opacity: 0.5,
       side: THREE.DoubleSide,
+      depthWrite: false,
     });
     const innerTick = new THREE.Mesh(innerTickGeo, innerTickMat);
     innerTick.position.y = 0.002;
     scene.add(innerTick);
 
-    // Build Complete Sculpted 3D Aston Martin Vehicle
-    const car3d = buildAstonCar3D(car, paint, caliper, cabinTrim);
-    car3dRef.current = car3d;
-    car3d.setDoorsOpen(doorsOpen);
-    car3d.setLightsMode(nightLights);
-    car3d.setXRay(xrayMode);
-    car3d.setActiveAero(modeRef.current === 'aero' ? speedRef.current : 0);
-    car3d.setBrakeThermal(
-      modeRef.current === 'aero' && brakeStressRef.current ? 0.5 + (speedRef.current / 360) * 1.6 : 0
-    );
-    scene.add(car3d.root);
-
-    // Grounded Studio Contact Shadow Plane beneath the tires
-    const shadowTex = createContactShadowTexture();
-    const shadowMat = new THREE.MeshBasicMaterial({
-      map: shadowTex,
-      transparent: true,
-      depthWrite: false,
-    });
-    const shadowPlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(car3d.blueprint.W * 1.38, car3d.blueprint.L * 1.18),
-      shadowMat
-    );
-    shadowPlane.rotation.x = -Math.PI / 2;
-    shadowPlane.position.y = 0.005;
-    scene.add(shadowPlane);
-
-    // Build POV List & Initialize Camera
-    const povs = getCameraPovsForCar(car3d.blueprint);
-    povsRef.current = povs;
-    const startPov = povs.find((p) => p.id === activePovId) || povs[0];
-    activePovRef.current = startPov;
-    car3d.setInteriorMode(startPov.zone === 'interior');
-
-    const camera = new THREE.PerspectiveCamera(
-      startPov.fov,
-      el.clientWidth / Math.max(1, el.clientHeight),
-      0.04,
-      80
-    );
-    camera.position.copy(startPov.position);
+    const startPov = povsRef.current[0];
+    const camera = new THREE.PerspectiveCamera(35, el.clientWidth / Math.max(1, el.clientHeight), 0.04, 80);
+    camera.position.set(-4.6, 1.5, -4.7);
     cameraRef.current = camera;
 
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.copy(startPov.target);
+    const controls = new OrbitControls(camera, studio.renderer.domElement);
+    controls.target.set(0, 0.5, 0);
     controls.enableDamping = true;
     controls.dampingFactor = 0.065;
-    controls.minDistance = startPov.minDistance;
-    controls.maxDistance = startPov.maxDistance;
-    controls.minPolarAngle = startPov.minPolarAngle;
-    controls.maxPolarAngle = startPov.maxPolarAngle;
-    controls.rotateSpeed = startPov.rotateSpeed;
     controls.enablePan = false;
+    if (startPov) {
+      controls.minDistance = startPov.minDistance;
+      controls.maxDistance = startPov.maxDistance;
+    }
     controls.update();
     controlsRef.current = controls;
 
@@ -363,16 +336,8 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
     controls.addEventListener('start', onControlStart);
 
     // Continuous 180 CFD Streamline Ribbons (shown only in Aero Wind Tunnel mode)
-    const bp = car3d.blueprint;
-    const streakCount = 180;
-    const streakPos = new Float32Array(streakCount * 2 * 3);
-    const streakCol = new Float32Array(streakCount * 2 * 3);
-    const streakMeta = Array.from({ length: streakCount }, (_, idx) => ({
-      laneX: ((idx % 10) / 9 - 0.5) * bp.W * 1.14,
-      zProg: Math.random(),
-      baseY: 0.1 + (Math.floor(idx / 10) / 18) * 0.98,
-    }));
-
+    const streakPos = new Float32Array(STREAK_COUNT * 2 * 3);
+    const streakCol = new Float32Array(STREAK_COUNT * 2 * 3);
     const streakGeo = new THREE.BufferGeometry();
     streakGeo.setAttribute('position', new THREE.BufferAttribute(streakPos, 3));
     streakGeo.setAttribute('color', new THREE.BufferAttribute(streakCol, 3));
@@ -384,26 +349,44 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
       depthWrite: false,
     });
     const streakLines = new THREE.LineSegments(streakGeo, streakMat);
-    streakLines.visible = modeRef.current === 'aero';
+    streakLines.visible = false;
+    streakLines.frustumCulled = false;
     scene.add(streakLines);
+    studio.props.push(brassRing, innerTick, streakLines);
+
+    // Stop rendering entirely while the observatory is scrolled away or the tab is hidden.
+    let onScreen = true;
+    const io = new IntersectionObserver(([entry]) => (onScreen = entry.isIntersecting), { threshold: 0.01 });
+    io.observe(el);
+
+    const resize = () => {
+      camera.aspect = el.clientWidth / Math.max(1, el.clientHeight);
+      camera.updateProjectionMatrix();
+      studio.setSize(el.clientWidth, el.clientHeight);
+    };
+    const ro = new ResizeObserver(resize);
+    ro.observe(el);
 
     let rafId = 0;
     let lastT = performance.now();
 
     const animate = (now: number) => {
+      rafId = requestAnimationFrame(animate);
       const dt = Math.min(0.05, (now - lastT) / 1000);
       lastT = now;
+      if (!onScreen || document.hidden) return;
+
+      const car3d = car3dRef.current;
 
       // 1. Update smooth POV flythrough if active
       const fly = flyStateRef.current;
       if (fly.active && fly.toSpec) {
-        fly.t = Math.min(1, fly.t + dt * 1.45);
+        fly.t = Math.min(1, fly.t + dt * fly.speed);
         if (fly.t >= 0.45) {
-          car3d.setInteriorMode(fly.toSpec.zone === 'interior');
+          car3d?.setInteriorMode(fly.toSpec.zone === 'interior');
         }
         // easeInOutCubic
-        const e =
-          fly.t < 0.5 ? 4 * fly.t * fly.t * fly.t : 1 - Math.pow(-2 * fly.t + 2, 3) / 2;
+        const e = fly.t < 0.5 ? 4 * fly.t * fly.t * fly.t : 1 - Math.pow(-2 * fly.t + 2, 3) / 2;
 
         camera.position.lerpVectors(fly.fromPos, fly.toSpec.position, e);
         controls.target.lerpVectors(fly.fromTarget, fly.toSpec.target, e);
@@ -412,7 +395,7 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
 
         if (fly.t >= 1) {
           fly.active = false;
-          car3d.setInteriorMode(fly.toSpec.zone === 'interior');
+          car3d?.setInteriorMode(fly.toSpec.zone === 'interior');
           controls.minDistance = fly.toSpec.minDistance;
           controls.maxDistance = fly.toSpec.maxDistance;
           controls.minPolarAngle = fly.toSpec.minPolarAngle;
@@ -426,22 +409,23 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
         controls.autoRotate = false;
       }
 
-      // 2. Animate vehicle doors, active wing, brake glow & wheel spin
-      car3d.update(dt);
+      // 2. Animate vehicle doors, brake glow & wheel spin; doors re-bake the contact shadow.
+      if (car3d && car3d.update(dt)) studio.invalidateShadow();
 
       // 3. Animate CFD streamlines when in aero mode
-      const isAero = modeRef.current === 'aero';
+      const isAero = modeRef.current === 'aero' && Boolean(car3d);
       streakLines.visible = isAero;
-      if (isAero) {
-        const curSpeed = speedRef.current;
-        const speedNorm = curSpeed / 360;
+      if (isAero && car3d) {
+        const bp = car3d.blueprint;
+        const metas = streakMetaRef.current;
+        const speedNorm = speedRef.current / 360;
         const posArr = streakGeo.attributes.position.array as Float32Array;
         const colArr = streakGeo.attributes.color.array as Float32Array;
         const flowVel = 2.0 + speedNorm * 5.4;
         const tailLen = 0.45 + speedNorm * 0.55;
 
-        for (let i = 0; i < streakCount; i++) {
-          const m = streakMeta[i];
+        for (let i = 0; i < metas.length; i++) {
+          const m = metas[i];
           m.zProg += dt * (flowVel / 8.8);
           if (m.zProg > 1) m.zProg -= 1;
           const zHead = -4.4 + m.zProg * 8.8;
@@ -473,41 +457,128 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
       }
 
       controls.update();
-      renderer.render(scene, camera);
-      rafId = requestAnimationFrame(animate);
+      studio.render(camera, dt);
     };
 
     rafId = requestAnimationFrame(animate);
 
-    const onResize = () => {
-      if (!el) return;
-      camera.aspect = el.clientWidth / Math.max(1, el.clientHeight);
-      camera.updateProjectionMatrix();
-      renderer.setSize(el.clientWidth, el.clientHeight);
-    };
-    window.addEventListener('resize', onResize);
-
     return () => {
       cancelAnimationFrame(rafId);
-      window.removeEventListener('resize', onResize);
+      io.disconnect();
+      ro.disconnect();
       controls.removeEventListener('start', onControlStart);
       controls.dispose();
-      car3d.dispose();
-      envTex.dispose();
-      floorMesh.geometry.dispose();
-      floorMat.dispose();
+      car3dRef.current?.dispose();
+      car3dRef.current = null;
       brassRingGeo.dispose();
       brassRingMat.dispose();
       innerTickGeo.dispose();
       innerTickMat.dispose();
-      shadowPlane.geometry.dispose();
-      shadowMat.dispose();
-      shadowTex.dispose();
       streakGeo.dispose();
       streakMat.dispose();
-      renderer.dispose();
+      studio.dispose();
+      studioRef.current = null;
+      cameraRef.current = null;
+      controlsRef.current = null;
     };
-    // Rebuild full 3D car only when selected model changes; material/paint/door updates are instant
+  }, []);
+
+  // Vehicle swap: fade to the void, build and shader-compile the next car while the frame is black,
+  // swap, then dolly into the POV once the new coachwork has actually been drawn.
+  useEffect(() => {
+    const studio = studioRef.current;
+    if (!studio) return;
+    let cancelled = false;
+    let next: Car3DInstance | null = null;
+
+    const hadCar = Boolean(car3dRef.current);
+    setLoadingCar(true);
+    studio.setFade(1, hadCar ? 3.2 : 100);
+    preloadCarModel(car.id);
+
+    new Promise<void>((resolve) => window.setTimeout(resolve, hadCar ? 340 : 0))
+      .then(() => {
+        if (cancelled) return;
+        // Built only once the frame is black, so its synchronous setup can't stutter the fade.
+        next = buildAstonCar3D(car, paintRef.current, caliperRef.current, cabinTrimRef.current);
+        return next.ready.catch(() => undefined);
+      })
+      .then(() => {
+        const camera = cameraRef.current;
+        if (cancelled || !next || !camera) return;
+        // X-ray switches the paint to its transparent shader variant: compile the one that will show.
+        next.setXRay(xrayRef.current);
+        return studio.precompile(next.root, camera, car3dRef.current?.root ?? null);
+      })
+      .then(() => {
+        if (cancelled || !next) return;
+        const incoming: Car3DInstance = next;
+
+        const prev = car3dRef.current;
+        if (prev) {
+          studio.scene.remove(prev.root);
+          prev.dispose();
+        }
+
+        // Re-apply whatever the user changed while the coachwork streamed in.
+        incoming.setPaint(paintRef.current);
+        incoming.setCaliper(caliperRef.current);
+        incoming.setCabinTrim(cabinTrimRef.current);
+        incoming.setLightsMode(nightLightsRef.current);
+        incoming.setXRay(xrayRef.current);
+        incoming.setActiveAero(modeRef.current === 'aero' ? speedRef.current : 0);
+        incoming.setBrakeThermal(
+          brakeThermalFor(modeRef.current === 'aero', brakeStressRef.current, speedRef.current)
+        );
+        incoming.setDoorsOpen(doorsOpenRef.current);
+        studio.scene.add(incoming.root);
+        car3dRef.current = incoming;
+
+        const bp = incoming.blueprint;
+        studio.setCar(bp.L, bp.W);
+        streakMetaRef.current = buildStreakMeta(bp);
+
+        const povs = getCameraPovsForCar(bp);
+        povsRef.current = povs;
+        const pov = povs.find((p) => p.id === activePovIdRef.current) || povs[0];
+        activePovRef.current = pov;
+        incoming.setInteriorMode(pov.zone === 'interior');
+
+        // Reveal: start a little wider and lower, then glide into the POV as the frame fades up.
+        flyStateRef.current.active = false;
+        const camera = cameraRef.current;
+        const controls = controlsRef.current;
+        if (camera && controls) {
+          if (pov.zone === 'interior') {
+            camera.position.copy(pov.position);
+            controls.target.copy(pov.target);
+          } else {
+            const framed = framedSpec(pov, camera.aspect);
+            const offset = new THREE.Vector3().subVectors(framed.position, framed.target).multiplyScalar(1.16);
+            camera.position.copy(pov.target).add(offset);
+            camera.position.y = Math.max(0.35, camera.position.y - 0.18);
+            controls.target.copy(pov.target);
+          }
+          camera.fov = pov.fov + 3;
+          camera.updateProjectionMatrix();
+        }
+
+        // Let two frames of the new car render while still black: leftover GPU uploads land
+        // off-screen, and the dolly, doors and fade all start from their first frame.
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            if (cancelled) return;
+            flyTo(pov, 0.62);
+            setLoadingCar(false);
+            studio.setFade(0, 1.25);
+          })
+        );
+      });
+
+    return () => {
+      cancelled = true;
+      if (next && car3dRef.current !== next) next.dispose();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [car]);
 
@@ -567,6 +638,13 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
     <>
       <div className="studio-viewport">
         <div ref={mountRef} style={{ width: '100%', height: '100%', cursor: 'grab' }} />
+
+        {loadingCar && (
+          <div className="stage-loading" role="status" aria-live="polite">
+            <span className="stage-loading-label">Preparing {car.name} coachwork</span>
+            <span className="stage-loading-bar" />
+          </div>
+        )}
 
         {/* Non-overlapping Top Bar HUD */}
         <div className="hud-top-bar">

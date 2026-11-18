@@ -5,12 +5,16 @@ import type { AstonCar, QCabinTrim, QCaliperFinish, QPaintFinish } from '../data
 import { buildCabin3D, type Cabin3DResult } from './cabinBuilder';
 import { getBlueprintForCar, type Car3DBlueprint } from './carProfiles';
 import {
-  createClusterTexture,
-  createLeatherTextures,
-  getCarbonFiberTextures,
-  getFlakeNormalTexture,
-  getRotorTextures,
-} from './textures';
+  buildDoorLeaves,
+  disposeDoorLeaves,
+  findNodeByName,
+  retargetDoorLeaves,
+  updateDoorLeaves,
+  type DoorLeaf,
+  type DoorLeafSpec,
+} from './doorRig';
+import { createClusterTexture, createLeatherTextures, getCarbonWeaveTexture, getRotorTextures } from './textures';
+import { installMetallicFlake, installTriplanarCarbon, smoothCreasedNormals } from './surfaceShaders';
 
 export interface Car3DInstance {
   root: THREE.Group;
@@ -24,7 +28,10 @@ export interface Car3DInstance {
   setInteriorMode: (inside: boolean) => void;
   setActiveAero: (speedKmh: number) => void;
   setBrakeThermal: (tempNorm: number) => void;
-  update: (dt: number) => void;
+  /** Resolves once the GLB coachwork is mounted, shaded and rigged (rejects on load failure). */
+  ready: Promise<void>;
+  /** Advances animation; returns true while any door leaf is still moving. */
+  update: (dt: number) => boolean;
   dispose: () => void;
 }
 
@@ -32,6 +39,11 @@ const gltfLoader = new GLTFLoader();
 gltfLoader.setMeshoptDecoder(MeshoptDecoder);
 
 const glbTemplateCache = new Map<string, Promise<THREE.Group>>();
+
+/** Starts (or joins) a car's GLB download early, so a deferred build only pays for parsing. */
+export function preloadCarModel(carId: string): void {
+  loadGlbTemplate(carId).catch(() => undefined);
+}
 
 function loadGlbTemplate(carId: string): Promise<THREE.Group> {
   const existing = glbTemplateCache.get(carId);
@@ -78,24 +90,107 @@ function getFullNodePath(obj: THREE.Object3D): string {
 }
 
 /**
- * Wraps a list of target nodes inside a hinged pivot group at the specified local hinge coordinate.
+ * Builds the left leaf, then mirrors it across the car centreline for the right leaf.
+ * A reflection turns rotation R(axis, φ) into R(mirroredAxis, −φ), so the right door
+ * gets the x-flipped hinge/axis and the negated angle.
  */
-function createHingedDoorGroup(
-  parentScene: THREE.Object3D,
-  nodes: THREE.Object3D[],
-  hingeInScene: THREE.Vector3
-): THREE.Group | null {
-  if (nodes.length === 0) return null;
-  const pivot = new THREE.Group();
-  pivot.rotation.order = 'YXZ';
-  pivot.position.copy(hingeInScene);
-  parentScene.add(pivot);
-  pivot.updateMatrixWorld(true);
-  nodes.forEach((node) => {
-    node.updateMatrixWorld(true);
-    pivot.attach(node);
-  });
-  return pivot;
+function mirroredPair(left: Omit<DoorLeafSpec, 'side'>, rightNodes?: string[], rightDelay = 0.14): DoorLeafSpec[] {
+  const leftCut = left.cut;
+  return [
+    { ...left, side: -1 },
+    {
+      ...left,
+      side: 1,
+      nodes: rightNodes,
+      cut: leftCut
+        ? (b, name) => {
+            const flipped = new THREE.Box3(
+              new THREE.Vector3(-b.max.x, b.min.y, b.min.z),
+              new THREE.Vector3(-b.min.x, b.max.y, b.max.z)
+            );
+            return leftCut(flipped, name);
+          }
+        : undefined,
+      hinge: new THREE.Vector3(-left.hinge.x, left.hinge.y, left.hinge.z),
+      axis: new THREE.Vector3(-left.axis.x, left.axis.y, left.axis.z),
+      openAngle: -left.openAngle,
+      delay: rightDelay,
+    },
+  ];
+}
+
+const SWAN_TILT = THREE.MathUtils.degToRad(12);
+
+/**
+ * Real-world door kinematics per model, in car space (metres, nose −Z, left −X):
+ *  - Vanquish / DB12: Aston "swan-wing" – front hinge whose axis leans back 12°, so the door
+ *    climbs as it swings out (kerb clearance).
+ *  - Valhalla: dihedral – hinge low on the A-pillar, axis tilted out of vertical so the door
+ *    rotates up and forward.
+ *  - Valkyrie: roof-hinged gullwing canopy – each half swings up about the roof spine and
+ *    carries its side glass and upper side skin with it.
+ */
+function getDoorSpecs(carId: string): DoorLeafSpec[] {
+  switch (carId) {
+    case 'vanquish':
+      return mirroredPair(
+        {
+          motion: 'swan',
+          nodes: ['amdb11_door_L', 'amdb11_doorpanel_L', 'amdb11_doorglass_L', 'amdb11_mirror_L'],
+          hinge: new THREE.Vector3(-0.97, 0.74, -0.69),
+          axis: new THREE.Vector3(0, Math.cos(SWAN_TILT), Math.sin(SWAN_TILT)),
+          openAngle: -THREE.MathUtils.degToRad(64),
+          delay: 0,
+        },
+        ['amdb11_door_R', 'amdb11_doorpanel_R', 'amdb11_doorglass_R', 'amdb11_mirror_R']
+      );
+    case 'db12':
+      // DB12 ships its door skins inside the one-piece body meshes; cut them out by region.
+      return mirroredPair(
+        {
+          motion: 'swan',
+          cut: (b) =>
+            b.max.x < -0.6 &&
+            b.min.z > -0.665 &&
+            b.max.z < 0.9 &&
+            b.min.y > 0.15 &&
+            b.max.y > 0.45,
+          hinge: new THREE.Vector3(-0.9, 0.62, -0.6),
+          axis: new THREE.Vector3(0, Math.cos(SWAN_TILT), Math.sin(SWAN_TILT)),
+          openAngle: -THREE.MathUtils.degToRad(64),
+          delay: 0,
+        },
+        undefined
+      );
+    case 'valhalla':
+      return mirroredPair(
+        {
+          motion: 'dihedral',
+          nodes: ['detach_door_L_50'],
+          hinge: new THREE.Vector3(-0.82, 0.76, -0.98),
+          axis: new THREE.Vector3(Math.cos(THREE.MathUtils.degToRad(40)), Math.sin(THREE.MathUtils.degToRad(40)), -0.12),
+          openAngle: -THREE.MathUtils.degToRad(62),
+          delay: 0,
+        },
+        ['detach_door_R_50']
+      );
+    case 'valkyrie':
+      return mirroredPair(
+        {
+          motion: 'gullwing',
+          nodes: ['Plane.016', 'Plane.023'],
+          cutMeshes: /Windows/i,
+          cut: (b) => b.max.x < -0.3,
+          hinge: new THREE.Vector3(-0.15, 1.04, -0.15),
+          axis: new THREE.Vector3(0, 0.06, 1),
+          openAngle: -THREE.MathUtils.degToRad(68),
+          delay: 0,
+        },
+        ['Plane.015', 'Plane.025']
+      );
+    default:
+      return [];
+  }
 }
 
 /**
@@ -118,119 +213,122 @@ export function buildAstonCar3D(
   // Kick off background preload of other models
   preloadAllCarGlbs();
 
-  const { map: carbonMap, bumpMap: carbonBump } = getCarbonFiberTextures();
-  const flakeNormal = getFlakeNormalTexture();
+  const carbonWeave = getCarbonWeaveTexture();
   const rotorTex = getRotorTextures();
 
-  const paintColor = new THREE.Color(initialPaint.isNeutral ? '#b8bfc4' : initialPaint.hex);
+  // Automotive paint = tinted metallic base (satin, flake-sparkled) under a glass-smooth clearcoat.
   const paintMat = new THREE.MeshPhysicalMaterial({
-    color: paintColor,
-    metalness: initialPaint.isNeutral ? 0.78 : 0.72,
-    roughness: 0.13,
+    color: new THREE.Color(initialPaint.isNeutral ? '#c3c9cc' : initialPaint.hex),
     clearcoat: 1.0,
-    clearcoatRoughness: 0.035,
-    normalMap: flakeNormal,
-    normalScale: new THREE.Vector2(0.028, 0.028),
-    reflectivity: 1.0,
-    envMapIntensity: 2.15,
-    transparent: false,
-    opacity: 1.0,
+    clearcoatRoughness: 0.028,
+    envMapIntensity: 1.0,
     side: THREE.DoubleSide,
   });
+  const applyPaintFinish = (paint: QPaintFinish) => {
+    paintMat.color.set(paint.isNeutral ? '#c3c9cc' : paint.hex);
+    paintMat.metalness = paint.isNeutral ? 0.84 : 0.62;
+    paintMat.roughness = paint.isNeutral ? 0.3 : 0.36;
+  };
+  applyPaintFinish(initialPaint);
+  installMetallicFlake(paintMat);
 
   const carbonMat = new THREE.MeshPhysicalMaterial({
-    map: carbonMap,
-    bumpMap: carbonBump,
-    bumpScale: 0.005,
-    roughness: 0.26,
-    metalness: 0.35,
-    clearcoat: 0.82,
-    clearcoatRoughness: 0.1,
-    envMapIntensity: 1.55,
+    map: carbonWeave,
+    roughness: 0.3,
+    metalness: 0.25,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.045,
+    envMapIntensity: 1.0,
     side: THREE.DoubleSide,
   });
+  installTriplanarCarbon(carbonMat, 10);
 
   const darkTrimMat = new THREE.MeshStandardMaterial({
     color: '#111514',
-    roughness: 0.65,
-    metalness: 0.32,
+    roughness: 0.58,
+    metalness: 0.25,
+    envMapIntensity: 0.8,
     side: THREE.DoubleSide,
   });
 
   const chromeMat = new THREE.MeshStandardMaterial({
-    color: '#d4dcd9',
-    metalness: 0.94,
-    roughness: 0.14,
-    envMapIntensity: 2.0,
+    color: '#e3e8ea',
+    metalness: 1.0,
+    roughness: 0.07,
+    envMapIntensity: 1.2,
     side: THREE.DoubleSide,
   });
 
   const grilleMetalMat = new THREE.MeshStandardMaterial({
-    color: '#8f9895',
-    metalness: 0.88,
-    roughness: 0.22,
-    envMapIntensity: 1.7,
+    color: '#9aa29f',
+    metalness: 0.95,
+    roughness: 0.2,
+    envMapIntensity: 1.1,
     side: THREE.DoubleSide,
   });
 
   const wheelAlloyMat = new THREE.MeshPhysicalMaterial({
-    color: '#adb5b2',
-    metalness: 0.9,
+    color: '#b9bfc1',
+    metalness: 0.96,
     roughness: 0.2,
-    clearcoat: 0.6,
-    envMapIntensity: 1.85,
+    clearcoat: 0.7,
+    clearcoatRoughness: 0.06,
+    envMapIntensity: 1.1,
     side: THREE.DoubleSide,
   });
 
-  const darkAlloyMat = new THREE.MeshStandardMaterial({
-    color: '#1b1f1e',
-    metalness: 0.82,
-    roughness: 0.28,
-    envMapIntensity: 1.5,
+  const darkAlloyMat = new THREE.MeshPhysicalMaterial({
+    color: '#1d2121',
+    metalness: 0.9,
+    roughness: 0.3,
+    clearcoat: 0.6,
+    clearcoatRoughness: 0.08,
+    envMapIntensity: 1.0,
     side: THREE.DoubleSide,
   });
 
   const tireMat = new THREE.MeshStandardMaterial({
-    color: '#121514',
-    roughness: 0.82,
-    metalness: 0.06,
+    color: '#0d0f0f',
+    roughness: 0.9,
+    metalness: 0.0,
+    envMapIntensity: 0.55,
     side: THREE.DoubleSide,
   });
 
+  // Alpha-blended glass also scales its reflections by opacity, so the env term is boosted to
+  // keep a convincing sheen while the dark tint stays see-through to the cabin.
   const glassMat = new THREE.MeshPhysicalMaterial({
-    color: '#0b1110',
+    color: '#0a0f0e',
     transparent: true,
-    opacity: 0.24,
-    roughness: 0.035,
-    metalness: 0.1,
-    reflectivity: 1.0,
-    clearcoat: 1.0,
-    clearcoatRoughness: 0.03,
-    envMapIntensity: 2.25,
+    opacity: 0.34,
+    roughness: 0.0,
+    metalness: 0.0,
+    ior: 1.52,
+    specularIntensity: 1.0,
+    envMapIntensity: 1.55,
     side: THREE.DoubleSide,
     depthWrite: false,
   });
 
   const clearLensMat = new THREE.MeshPhysicalMaterial({
-    color: '#e8f1f5',
+    color: '#eef4f7',
     transparent: true,
-    opacity: 0.18,
-    roughness: 0.02,
-    metalness: 0.05,
-    reflectivity: 1.0,
-    clearcoat: 1.0,
-    envMapIntensity: 2.4,
+    opacity: 0.16,
+    roughness: 0.0,
+    metalness: 0.0,
+    ior: 1.49,
+    envMapIntensity: 1.8,
     side: THREE.DoubleSide,
     depthWrite: false,
   });
 
   const caliperMat = new THREE.MeshPhysicalMaterial({
     color: new THREE.Color(initialCaliper.hex),
-    metalness: 0.55,
-    roughness: 0.22,
-    clearcoat: 0.9,
-    clearcoatRoughness: 0.08,
-    envMapIntensity: 1.7,
+    metalness: 0.3,
+    roughness: 0.3,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.05,
+    envMapIntensity: 1.0,
     side: THREE.DoubleSide,
   });
 
@@ -245,10 +343,11 @@ export function buildAstonCar3D(
     side: THREE.DoubleSide,
   });
 
+  // HDR emissive values: day DRLs sit just over the bloom threshold, night mode flares them.
   const drlMat = new THREE.MeshStandardMaterial({
     color: '#f5faff',
-    emissive: new THREE.Color('#dff2ff'),
-    emissiveIntensity: 1.85,
+    emissive: new THREE.Color('#e4f3ff'),
+    emissiveIntensity: 2.2,
     roughness: 0.1,
     side: THREE.DoubleSide,
   });
@@ -256,32 +355,34 @@ export function buildAstonCar3D(
   const tailBladeMat = new THREE.MeshStandardMaterial({
     color: '#ff1f2d',
     emissive: new THREE.Color('#ff1424'),
-    emissiveIntensity: 2.25,
+    emissiveIntensity: 2.4,
     roughness: 0.12,
     side: THREE.DoubleSide,
   });
 
-  let glbLeatherTex = createLeatherTextures(initialTrim.primaryHex, initialTrim.stitchHex);
+  let glbLeatherTex = createLeatherTextures(initialTrim.primaryHex, initialTrim.stitchHex, false);
   const glbLeatherMat = new THREE.MeshStandardMaterial({
     map: glbLeatherTex.map,
     bumpMap: glbLeatherTex.bumpMap,
     bumpScale: 0.006,
-    roughness: 0.54,
-    metalness: 0.08,
+    roughness: 0.62,
+    metalness: 0.0,
+    envMapIntensity: 0.9,
     side: THREE.DoubleSide,
   });
 
   const glbLeatherSecondaryMat = new THREE.MeshStandardMaterial({
     color: initialTrim.primaryHex,
-    roughness: 0.58,
-    metalness: 0.06,
+    roughness: 0.66,
+    metalness: 0.0,
+    envMapIntensity: 0.85,
     side: THREE.DoubleSide,
   });
 
   const glbStitchMat = new THREE.MeshStandardMaterial({
     color: initialTrim.stitchHex,
     emissive: new THREE.Color(initialTrim.stitchHex),
-    emissiveIntensity: 0.18,
+    emissiveIntensity: 0.12,
     roughness: 0.4,
     side: THREE.DoubleSide,
   });
@@ -301,24 +402,26 @@ export function buildAstonCar3D(
   let isInteriorPov = false;
   let isNightLights = false;
   let isXray = false;
-  let doorTarget = 0;
-  let doorCurrent = 0;
+  let doorsWantOpen = false;
   let brakeHeatTarget = 0;
   let brakeHeatCurrent = 0;
   let aeroSpeed = 0;
 
-  const doorPivots: Array<{
-    pivot: THREE.Object3D;
-    side: number;
-    mode: 'dihedral' | 'swan' | 'canopy' | 'window-drop';
-    baseY?: number;
-  }> = [];
+  let doorLeaves: DoorLeaf[] = [];
   const wheelSpinNodes: THREE.Object3D[] = [];
   const customClonedMats: THREE.Material[] = [];
   const customHeadlightMats: THREE.MeshStandardMaterial[] = [];
 
+  // Vanquish & DB12 GLBs carry fully modelled cabins (real wheel, binnacle, console, seats),
+  // so their cockpit POVs stay inside the coachwork instead of swapping to the bespoke cabin.
+  const hasNativeCockpit = car.id === 'vanquish' || car.id === 'db12';
+
   function syncInteriorExteriorVisibility() {
-    if (isInteriorPov) {
+    if (isInteriorPov && hasNativeCockpit) {
+      glbContainer.visible = true;
+      cabinResult.group.visible = false;
+      cabinResult.setCockpitSurroundVisible(false);
+    } else if (isInteriorPov) {
       glbContainer.visible = false;
       cabinResult.group.visible = true;
       cabinResult.group.scale.set(1, 1, 1);
@@ -364,7 +467,7 @@ export function buildAstonCar3D(
     thermalRotorDiscs.push(rMesh);
   });
 
-  loadGlbTemplate(car.id)
+  const ready = loadGlbTemplate(car.id)
     .then((template) => {
       if (isDisposed) return;
 
@@ -402,6 +505,38 @@ export function buildAstonCar3D(
       glbScene.position.set(-rawCenter.x, -rawBox.min.y, -rawCenter.z);
 
       // 3. Classify every mesh in the GLB and bind Q by Aston Martin PBR shaders
+      glbWrapper.updateMatrixWorld(true); // car-space matrices for positional classification
+      const tmpBox = new THREE.Box3();
+      const tmpCenter = new THREE.Vector3();
+      const centerOf = (o: THREE.Object3D) => tmpBox.setFromObject(o).getCenter(tmpCenter);
+
+      // Valhalla ships one texture atlas for rims, lamps and badges: share one clone per role
+      // (instead of ~300 per-mesh clones) and let the headlamp cluster glow from its own texture.
+      const atlasMats = new Map<string, THREE.MeshStandardMaterial>();
+      const sharedAtlasMat = (role: 'rim' | 'lamp' | 'trim', source: THREE.MeshStandardMaterial) => {
+        let m = atlasMats.get(role);
+        if (!m) {
+          m = source.clone();
+          m.roughness = role === 'rim' ? 0.22 : 0.3;
+          m.metalness = role === 'rim' ? 0.9 : 0.55;
+          m.envMapIntensity = 1.05;
+          if (role === 'lamp') {
+            m.emissive = new THREE.Color('#ffffff');
+            m.emissiveMap = m.map;
+            m.emissiveIntensity = isNightLights ? 5.0 : 1.4;
+            customHeadlightMats.push(m);
+          }
+          customClonedMats.push(m);
+          atlasMats.set(role, m);
+        }
+        return m;
+      };
+      const isValhallaHeadlamp = (o: THREE.Object3D) => {
+        const c = centerOf(o);
+        const ax = Math.abs(c.x);
+        return ax > 0.74 && ax < 0.96 && c.y > 0.42 && c.y < 0.62 && c.z > -1.92 && c.z < -1.62;
+      };
+
       glbScene.traverse((obj) => {
         if (!(obj instanceof THREE.Mesh)) return;
         obj.castShadow = true;
@@ -458,13 +593,9 @@ export function buildAstonCar3D(
           } else if (/carbon_fiber|chassis_pivot_bottom/i.test(pathName)) {
             obj.material = carbonMat;
           } else if (origMat instanceof THREE.MeshStandardMaterial && origMat.map) {
-            // Material.002 (textured rims, headlamp internals, grille & badging)
-            const cloned = origMat.clone();
-            cloned.roughness = /Wheel.*_rims/i.test(pathName) ? 0.24 : 0.28;
-            cloned.metalness = /Wheel.*_rims/i.test(pathName) ? 0.78 : 0.55;
-            cloned.envMapIntensity = 1.85;
-            obj.material = cloned;
-            customClonedMats.push(cloned);
+            // Material.002 atlas (rims, headlamp internals, grille & badging)
+            const role = /Wheel.*_rims/i.test(pathName) ? 'rim' : isValhallaHeadlamp(obj) ? 'lamp' : 'trim';
+            obj.material = sharedAtlasMat(role, origMat);
           }
         } else if (car.id === 'vanquish') {
           if (matName === 'amdb11' || matName === 'amdb11_roof') {
@@ -523,8 +654,8 @@ export function buildAstonCar3D(
             const cloned = origMat.clone();
             cloned.emissive = new THREE.Color('#dff2ff');
             if (cloned.map) cloned.emissiveMap = cloned.map;
-            cloned.emissiveIntensity = isNightLights ? 3.2 : 1.15;
-            cloned.envMapIntensity = 2.0;
+            cloned.emissiveIntensity = isNightLights ? 5.0 : 1.4;
+            cloned.envMapIntensity = 1.2;
             obj.material = cloned;
             customClonedMats.push(cloned);
             customHeadlightMats.push(cloned);
@@ -533,11 +664,16 @@ export function buildAstonCar3D(
           } else if (origMat instanceof THREE.MeshStandardMaterial) {
             const cloned = origMat.clone();
             if (/Wheel[12]A/i.test(matName)) {
-              cloned.metalness = 0.78;
-              cloned.roughness = 0.24;
-              cloned.envMapIntensity = 1.9;
+              cloned.metalness = 0.9;
+              cloned.roughness = 0.22;
+              cloned.envMapIntensity = 1.1;
+            } else if (matName === 'InteriorA' || matName === 'TexturedA') {
+              // Cabin trims read as chrome with the source PBR values; make them soft-touch.
+              cloned.metalness = Math.min(cloned.metalness, 0.12);
+              cloned.roughness = Math.max(cloned.roughness, 0.58);
+              cloned.envMapIntensity = 0.9;
             } else {
-              cloned.envMapIntensity = 1.5;
+              cloned.envMapIntensity = 0.95;
             }
             obj.material = cloned;
             customClonedMats.push(cloned);
@@ -545,127 +681,45 @@ export function buildAstonCar3D(
         }
       });
 
-      // Compute exact car-local meter bounds while glbWrapper is still detached from parent scene
-      glbWrapper.updateMatrixWorld(true);
-
-      const computeNodesBox = (nodes: THREE.Object3D[]) => {
-        const b = new THREE.Box3();
-        nodes.forEach((n) => b.expandByObject(n));
-        return b;
-      };
-
-      // 4. Bind Articulated Doors & Spinning Wheels in glbContainer world-meter space
-      if (car.id === 'valhalla') {
-        const doorL = glbScene.getObjectByName('detach_door_L_50');
-        const doorR = glbScene.getObjectByName('detach_door_R_50');
-        const boxL = doorL ? computeNodesBox([doorL]) : null;
-        const boxR = doorR ? computeNodesBox([doorR]) : null;
-        glbContainer.add(glbWrapper);
-        glbContainer.updateMatrixWorld(true);
-
-        const pivotL =
-          doorL && boxL
-            ? createHingedDoorGroup(
-                glbContainer,
-                [doorL],
-                new THREE.Vector3(boxL.min.x + 0.12, boxL.max.y - 0.12, boxL.min.z + 0.08)
-              )
-            : null;
-        const pivotR =
-          doorR && boxR
-            ? createHingedDoorGroup(
-                glbContainer,
-                [doorR],
-                new THREE.Vector3(boxR.max.x - 0.12, boxR.max.y - 0.12, boxR.min.z + 0.08)
-              )
-            : null;
-        if (pivotL) doorPivots.push({ pivot: pivotL, side: -1, mode: 'dihedral' });
-        if (pivotR) doorPivots.push({ pivot: pivotR, side: 1, mode: 'dihedral' });
-
-        ['WheelFL', 'WheelFR', 'WheelBL', 'WheelBR'].forEach((wName) => {
-          const wNode = glbScene.getObjectByName(wName);
-          if (wNode) wheelSpinNodes.push(wNode);
-        });
-      } else if (car.id === 'vanquish') {
-        const leftDoorNodes = [
-          'amdb11_door_L',
-          'amdb11_doorpanel_L',
-          'amdb11_doorglass_L',
-          'amdb11_mirror_L',
-        ]
-          .map((n) => glbScene.getObjectByName(n))
-          .filter((n): n is THREE.Object3D => Boolean(n));
-
-        const rightDoorNodes = [
-          'amdb11_door_R',
-          'amdb11_doorpanel_R',
-          'amdb11_doorglass_R',
-          'amdb11_mirror_R',
-        ]
-          .map((n) => glbScene.getObjectByName(n))
-          .filter((n): n is THREE.Object3D => Boolean(n));
-
-        const boxL = computeNodesBox(leftDoorNodes);
-        const boxR = computeNodesBox(rightDoorNodes);
-        glbContainer.add(glbWrapper);
-        glbContainer.updateMatrixWorld(true);
-
-        const pivotL = createHingedDoorGroup(
-          glbContainer,
-          leftDoorNodes,
-          new THREE.Vector3(boxL.min.x + 0.06, (boxL.min.y + boxL.max.y) * 0.48, boxL.min.z + 0.05)
-        );
-        const pivotR = createHingedDoorGroup(
-          glbContainer,
-          rightDoorNodes,
-          new THREE.Vector3(boxR.max.x - 0.06, (boxR.min.y + boxR.max.y) * 0.48, boxR.min.z + 0.05)
-        );
-        if (pivotL) doorPivots.push({ pivot: pivotL, side: -1, mode: 'swan' });
-        if (pivotR) doorPivots.push({ pivot: pivotR, side: 1, mode: 'swan' });
-      } else if (car.id === 'valkyrie') {
-        const canopyNodes = ['Plane.047', 'Plane.014', 'Plane.015', 'Plane.016']
-          .map((n) => glbScene.getObjectByName(n))
-          .filter((n): n is THREE.Object3D => Boolean(n));
-        const boxC = computeNodesBox(canopyNodes);
-        glbContainer.add(glbWrapper);
-        glbContainer.updateMatrixWorld(true);
-
-        const canopyPivot = createHingedDoorGroup(
-          glbContainer,
-          canopyNodes,
-          new THREE.Vector3(0, boxC.max.y - 0.05, boxC.min.z + 0.08)
-        );
-        if (canopyPivot) doorPivots.push({ pivot: canopyPivot, side: 1, mode: 'canopy' });
-      } else if (car.id === 'db12') {
-        glbContainer.add(glbWrapper);
-        glbContainer.updateMatrixWorld(true);
-        const sideGlass = glbScene.getObjectByName('GlassInside_20');
-        if (sideGlass) {
-          doorPivots.push({
-            pivot: sideGlass,
-            side: 1,
-            mode: 'window-drop',
-            baseY: sideGlass.position.y,
-          });
+      // 3b. Rebuild faceted per-face normals (Valhalla/Valkyrie are triangle soup; Vanquish's
+      //     low-poly panels too) so coachwork reflects the studio as continuous surfaces.
+      glbScene.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        const wholeModel = car.id === 'valhalla' || car.id === 'valkyrie';
+        const paintedPanel = car.id === 'vanquish' && obj.material === paintMat;
+        if (wholeModel || paintedPanel) {
+          obj.geometry = smoothCreasedNormals(obj.geometry, 48);
         }
-        ['Wheel2A_LF_24', 'Wheel2A_RF_25', 'Wheel1A_LR_26', 'Wheel1A_RR_27'].forEach((wName) => {
-          const wNode = glbScene.getObjectByName(wName);
-          if (wNode) wheelSpinNodes.push(wNode);
-        });
-      }
+      });
+
+      // 4. Mount coachwork, then rig hinged doors in glbContainer (car-space metres)
+      glbContainer.add(glbWrapper);
+      glbContainer.updateMatrixWorld(true);
+      doorLeaves = buildDoorLeaves(glbContainer, glbScene, getDoorSpecs(car.id));
+      // The user may have pressed "Open Doors" while the GLB was still streaming in.
+      if (doorsWantOpen) retargetDoorLeaves(doorLeaves, true);
+
+      const wheelNames: Record<string, string[]> = {
+        valhalla: ['WheelFL', 'WheelFR', 'WheelBL', 'WheelBR'],
+        db12: ['Wheel2A_LF_24', 'Wheel2A_RF_25', 'Wheel1A_LR_26', 'Wheel1A_RR_27'],
+      };
+      (wheelNames[car.id] || []).forEach((wName) => {
+        const wNode = findNodeByName(glbScene, wName);
+        if (wNode) wheelSpinNodes.push(wNode);
+      });
     })
     .catch((err) => {
       console.error(`Failed to load GLB for ${car.id}:`, err);
+      throw err;
     });
 
   return {
     root,
     blueprint: bp,
+    ready,
     setPaint: (paint: QPaintFinish) => {
-      paintMat.color.set(paint.isNeutral ? '#b8bfc4' : paint.hex);
-      paintMat.metalness = paint.isNeutral ? 0.78 : 0.72;
-      paintMat.roughness = paint.isNeutral ? 0.14 : 0.13;
-      paintMat.needsUpdate = true;
+      // Uniform-only change: no shader recompile, so swatch clicks are instant.
+      applyPaintFinish(paint);
     },
     setCaliper: (caliper: QCaliperFinish) => {
       caliperMat.color.set(caliper.hex);
@@ -674,7 +728,7 @@ export function buildAstonCar3D(
     setCabinTrim: (trim: QCabinTrim) => {
       cabinResult.updateTrim(trim);
 
-      const nextTex = createLeatherTextures(trim.primaryHex, trim.stitchHex);
+      const nextTex = createLeatherTextures(trim.primaryHex, trim.stitchHex, false);
       glbLeatherTex.map.dispose();
       glbLeatherTex.bumpMap.dispose();
       glbLeatherTex = nextTex;
@@ -687,14 +741,16 @@ export function buildAstonCar3D(
       glbStitchMat.emissive.set(trim.stitchHex);
     },
     setDoorsOpen: (open: boolean) => {
-      doorTarget = open ? 1 : 0;
+      if (doorsWantOpen === open) return;
+      doorsWantOpen = open;
+      retargetDoorLeaves(doorLeaves, open);
     },
     setLightsMode: (nightMode: boolean) => {
       isNightLights = nightMode;
-      drlMat.emissiveIntensity = nightMode ? 4.4 : 1.85;
-      tailBladeMat.emissiveIntensity = nightMode ? 4.8 : 2.25;
+      drlMat.emissiveIntensity = nightMode ? 7.5 : 2.2;
+      tailBladeMat.emissiveIntensity = nightMode ? 6.5 : 2.4;
       customHeadlightMats.forEach((m) => {
-        m.emissiveIntensity = nightMode ? 3.2 : 1.15;
+        m.emissiveIntensity = nightMode ? 5.0 : 1.4;
       });
       cabinResult.setLightsMode(nightMode);
 
@@ -723,22 +779,7 @@ export function buildAstonCar3D(
       brakeHeatTarget = Math.max(0, Math.min(2.2, tempNorm));
     },
     update: (dt: number) => {
-      doorCurrent += (doorTarget - doorCurrent) * Math.min(1, dt * 6.5);
-      doorPivots.forEach(({ pivot, side, mode, baseY }) => {
-        if (mode === 'dihedral') {
-          pivot.rotation.x = -doorCurrent * 0.42;
-          pivot.rotation.y = side * doorCurrent * 0.58;
-          pivot.rotation.z = -side * doorCurrent * 0.28;
-        } else if (mode === 'swan') {
-          pivot.rotation.x = -doorCurrent * 0.18;
-          pivot.rotation.y = side * doorCurrent * 0.74;
-          pivot.rotation.z = -side * doorCurrent * 0.08;
-        } else if (mode === 'canopy') {
-          pivot.rotation.x = -doorCurrent * 0.48;
-        } else if (mode === 'window-drop' && baseY !== undefined) {
-          pivot.position.y = baseY - doorCurrent * 0.16;
-        }
-      });
+      const doorsMoving = updateDoorLeaves(doorLeaves, dt);
 
       brakeHeatCurrent += (brakeHeatTarget - brakeHeatCurrent) * Math.min(1, dt * 5.0);
       rotorMat.emissiveIntensity = brakeHeatCurrent;
@@ -753,9 +794,12 @@ export function buildAstonCar3D(
           wNode.rotation.x += angular / r;
         });
       }
+      return doorsMoving;
     },
     dispose: () => {
       isDisposed = true;
+      disposeDoorLeaves(doorLeaves);
+      doorLeaves = [];
       cabinResult.dispose();
       glbLeatherTex.map.dispose();
       glbLeatherTex.bumpMap.dispose();

@@ -44,14 +44,25 @@ export function getCameraPovsForCar(bp: Car3DBlueprint): CameraPovSpec[] {
   const noseZ = -bp.L * 0.5;
   const tailZ = bp.L * 0.5;
 
-  const driverPos = new THREE.Vector3(bp.driverX, bp.eyeY + 0.03, bp.eyeZ + 0.05);
-  const driverAim = new THREE.Vector3(bp.driverX * 0.72, bp.wheelY - 0.04, bp.dashZ - 0.35);
+  const native = bp.nativeCockpit;
+  const v = (t: [number, number, number]) => new THREE.Vector3(t[0], t[1], t[2]);
 
-  const consolePos = new THREE.Vector3(0.03, bp.eyeY - 0.02, bp.seatBackZ - 0.28);
-  const consoleAim = new THREE.Vector3(0.0, bp.cabinFloorY + 0.26, bp.dashZ + 0.22);
+  const driverPos = native ? v(native.driver.pos) : new THREE.Vector3(bp.driverX, bp.eyeY + 0.03, bp.eyeZ + 0.05);
+  const driverAim = native
+    ? v(native.driver.aim)
+    : new THREE.Vector3(bp.driverX * 0.72, bp.wheelY - 0.04, bp.dashZ - 0.35);
 
-  const panoramaPos = new THREE.Vector3(-bp.driverX * 0.72, bp.eyeY + 0.04, bp.seatBackZ - 0.14);
-  const panoramaAim = new THREE.Vector3(bp.driverX * 0.55, bp.wheelY - 0.02, bp.dashZ - 0.18);
+  const consolePos = native ? v(native.console.pos) : new THREE.Vector3(0.03, bp.eyeY - 0.02, bp.seatBackZ - 0.28);
+  const consoleAim = native
+    ? v(native.console.aim)
+    : new THREE.Vector3(0.0, bp.cabinFloorY + 0.26, bp.dashZ + 0.22);
+
+  const panoramaPos = native
+    ? v(native.panorama.pos)
+    : new THREE.Vector3(-bp.driverX * 0.72, bp.eyeY + 0.04, bp.seatBackZ - 0.14);
+  const panoramaAim = native
+    ? v(native.panorama.aim)
+    : new THREE.Vector3(bp.driverX * 0.55, bp.wheelY - 0.02, bp.dashZ - 0.18);
 
   return [
     {

@@ -53,6 +53,11 @@ export interface Car3DBlueprint {
   hasActiveWing: boolean;
   rearWingY: number;
   rearWingZ: number;
+  /**
+   * Cockpit camera anchors measured off a GLB's own modelled cabin (seat, wheel, binnacle).
+   * When present, interior POVs use these instead of the bespoke-cabin blueprint anchors.
+   */
+  nativeCockpit?: Record<'driver' | 'console' | 'panorama', { pos: [number, number, number]; aim: [number, number, number] }>;
 }
 
 export const CAR_3D_BLUEPRINTS: Record<string, Car3DBlueprint> = {
@@ -184,6 +189,12 @@ export const CAR_3D_BLUEPRINTS: Record<string, Car3DBlueprint> = {
     hasActiveWing: false,
     rearWingY: 0,
     rearWingZ: 0,
+    // Measured on the GLB: wheel hub (−0.40, 0.85, −0.15), driver seat spans z −0.09…0.72.
+    nativeCockpit: {
+      driver: { pos: [-0.4, 1.05, 0.4], aim: [-0.37, 0.86, -0.45] },
+      console: { pos: [0.0, 1.09, 0.42], aim: [0.0, 0.72, -0.3] },
+      panorama: { pos: [0.3, 1.06, 0.45], aim: [-0.32, 0.86, -0.38] },
+    },
   },
   db12: {
     id: 'db12',
@@ -227,6 +238,12 @@ export const CAR_3D_BLUEPRINTS: Record<string, Car3DBlueprint> = {
     hasActiveWing: false,
     rearWingY: 0,
     rearWingZ: 0,
+    // Measured on the GLB: wheel hub (−0.40, 0.86, 0.03), driver seat spans z 0.02…0.80.
+    nativeCockpit: {
+      driver: { pos: [-0.4, 1.06, 0.53], aim: [-0.31, 0.84, -0.4] },
+      console: { pos: [0.0, 1.09, 0.56], aim: [0.0, 0.7, -0.18] },
+      panorama: { pos: [0.3, 1.07, 0.56], aim: [-0.32, 0.86, -0.3] },
+    },
   },
 };
 
