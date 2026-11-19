@@ -207,3 +207,63 @@ export function installTriplanarCarbon(material: THREE.MeshPhysicalMaterial, til
   };
   material.customProgramCacheKey = () => 'atelier-carbon';
 }
+
+/* ------------------------------------------------------------------------------------------------
+ * X-ray coachwork
+ *
+ * One shared shader for every body panel in X-ray mode: surfaces facing the camera all but vanish,
+ * silhouettes and panel edges glow (fresnel), and a scan band sweeps nose-to-tail. Additive and
+ * depth-write free, so the solid running gear, cabin and engine read through it like a cutaway.
+ * ---------------------------------------------------------------------------------------------- */
+
+export function createXrayMaterial(carLength: number): THREE.ShaderMaterial {
+  const material = new THREE.ShaderMaterial({
+    name: 'AtelierXray',
+    uniforms: {
+      uTime: { value: 0 },
+      uLength: { value: carLength },
+      uFill: { value: new THREE.Color('#5fa9e6') },
+      uEdge: { value: new THREE.Color('#d9f1ff') },
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vXrayNormal;
+      varying vec3 vXrayView;
+      varying vec3 vXrayWorld;
+      void main() {
+        // Same op order as three's project_vertex, so depth matches the X-ray depth pre-pass.
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vXrayNormal = normalize(normalMatrix * normal);
+        vXrayView = -mvPosition.xyz;
+        vXrayWorld = (modelMatrix * vec4(position, 1.0)).xyz;
+        gl_Position = projectionMatrix * mvPosition;
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform float uTime;
+      uniform float uLength;
+      uniform vec3 uFill;
+      uniform vec3 uEdge;
+      varying vec3 vXrayNormal;
+      varying vec3 vXrayView;
+      varying vec3 vXrayWorld;
+      void main() {
+        float facing = abs(dot(normalize(vXrayNormal), normalize(vXrayView)));
+        float rim = pow(1.0 - facing, 2.1);
+        float span = uLength + 1.6;
+        float scanZ = -0.5 * span + mod(uTime * 1.25, span);
+        float band = exp(-pow((vXrayWorld.z - scanZ) / 0.09, 2.0));
+        // A depth pre-pass leaves only the front-most shell layer, so it can carry the full glow.
+        vec3 colour = uFill * 0.035 + uEdge * (0.62 * rim) + uEdge * band * (0.12 + 0.45 * rim);
+        gl_FragColor = vec4(colour, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+  });
+  // Additive blending is order-independent, so skip three's back-then-front double draw of
+  // transparent double-sided meshes: it halves X-ray draw calls on the 300-mesh Valhalla.
+  material.forceSinglePass = true;
+  return material;
+}

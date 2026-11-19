@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Reflector } from 'three/examples/jsm/objects/Reflector.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
@@ -481,6 +482,7 @@ export class Studio {
   private readonly bloomStrength: number;
   private readonly composer: EffectComposer;
   private readonly renderPass: RenderPass;
+  private readonly ao: GTAOPass | null;
   private readonly bloom: UnrealBloomPass | null;
   private readonly finish: ShaderPass;
   private readonly floor: THREE.Mesh;
@@ -583,6 +585,10 @@ export class Studio {
     this.composer = new EffectComposer(this.renderer, target);
     this.renderPass = new RenderPass(this.scene, this.placeholderCamera);
     this.composer.addPass(this.renderPass);
+    // Ground-truth AO darkens panel gaps, intakes, arches and cabin corners that the studio IBL
+    // alone lights flat. High tier only; it costs one extra (half-resolution) G-buffer pass.
+    this.ao = this.quality.tier === 'high' ? this.createAmbientOcclusion() : null;
+    if (this.ao) this.composer.addPass(this.ao);
     // Threshold sits above paint highlights (linear HDR) so only lamps and true glints bloom.
     this.bloom = this.quality.bloom
       ? new UnrealBloomPass(new THREE.Vector2(1, 1), this.bloomStrength, 0.55, 1.1)
@@ -603,6 +609,30 @@ export class Studio {
     this.composer.addPass(this.finish);
 
     this.setSize(container.clientWidth, container.clientHeight);
+  }
+
+  private createAmbientOcclusion(): GTAOPass {
+    const ao = new GTAOPass(this.scene, this.placeholderCamera, 1, 1);
+    ao.updateGtaoMaterial({ radius: 0.32, distanceExponent: 1.5, thickness: 1.0, distanceFallOff: 1.0, scale: 1.0, samples: 16 });
+    ao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 6, rings: 2, samples: 16 });
+    ao.blendIntensity = 0.85;
+    const internals = ao as unknown as { _overrideVisibility: () => void; setSize: (w: number, h: number) => void };
+    // The mirror floor would re-render its whole reflection inside the G-buffer pass, and FX
+    // props shouldn't occlude the car: hide them for that pass only (restored by the pass).
+    const hidePointsAndLines = internals._overrideVisibility.bind(ao);
+    internals._overrideVisibility = () => {
+      hidePointsAndLines();
+      for (const prop of this.props) prop.visible = false;
+    };
+    // AO is low-frequency; computing it at half resolution quarters the cost.
+    const fullSize = ao.setSize.bind(ao);
+    internals.setSize = (w, h) => fullSize(Math.max(1, Math.round(w / 2)), Math.max(1, Math.round(h / 2)));
+    return ao;
+  }
+
+  /** X-ray swaps the shell to an additive ghost; AO from that shell would smudge the cutaway. */
+  setAmbientOcclusion(on: boolean) {
+    if (this.ao) this.ao.enabled = on;
   }
 
   /** Contact-shadow bounds + lamp positions follow the active car. */
@@ -722,12 +752,14 @@ export class Studio {
     }
 
     this.renderPass.camera = camera;
+    if (this.ao) this.ao.camera = camera;
     this.composer.render(dt);
   }
 
   dispose() {
     this.composer.dispose();
     this.renderPass.dispose();
+    this.ao?.dispose();
     this.bloom?.dispose();
     this.finish.dispose();
     this.contact.dispose();

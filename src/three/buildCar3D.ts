@@ -14,7 +14,9 @@ import {
   type DoorLeafSpec,
 } from './doorRig';
 import { createClusterTexture, createLeatherTextures, getCarbonWeaveTexture, getRotorTextures } from './textures';
-import { installMetallicFlake, installTriplanarCarbon, smoothCreasedNormals } from './surfaceShaders';
+import { createXrayMaterial, installMetallicFlake, installTriplanarCarbon, smoothCreasedNormals } from './surfaceShaders';
+import { straightenSteering } from './wheelAlignment';
+import { buildMechanicals, measureWheelCorners, type Mechanicals } from './mechanicals';
 
 export interface Car3DInstance {
   root: THREE.Group;
@@ -412,6 +414,58 @@ export function buildAstonCar3D(
   const customClonedMats: THREE.Material[] = [];
   const customHeadlightMats: THREE.MeshStandardMaterial[] = [];
 
+  // X-ray: every body panel swaps to one shared ghost shader, while running gear, cabin trim and
+  // engines keep their own materials, so each car reads as a cutaway (not only its paint fading).
+  const xrayMat = createXrayMaterial(bp.L);
+  const xraySolidMats = new Set<THREE.Material>([
+    tireMat,
+    wheelAlloyMat,
+    darkAlloyMat,
+    caliperMat,
+    rotorMat,
+    glbLeatherMat,
+    glbLeatherSecondaryMat,
+    glbStitchMat,
+    glbScreenMat,
+  ]);
+  const xraySolidMeshes = new Set<THREE.Object3D>();
+  const xraySwaps: {
+    mesh: THREE.Mesh;
+    original: THREE.Material | THREE.Material[];
+    renderOrder: number;
+    prepass: THREE.Mesh | null;
+  }[] = [];
+  // Depth-only pre-pass: shells overlap many layers deep (skin, inner wings, bay walls) and
+  // additive layers sum to a milky fog. Writing the shell's depth first means only the front-most
+  // layer glows, while the opaque running gear (drawn earlier) still shows through it.
+  const xrayDepthMat = new THREE.MeshBasicMaterial({
+    colorWrite: false,
+    depthWrite: true,
+    transparent: true,
+    side: THREE.DoubleSide,
+    // Nudged back a hair so the ghost pass on the very same surface always passes its depth test.
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
+  });
+  xrayDepthMat.forceSinglePass = true;
+  // Procedural running gear (engine, gearbox, suspension…) that only the X-ray cutaway reveals.
+  let mechanicals: Mechanicals | null = null;
+  const wheelCloneMats = new Set<THREE.Material>();
+  const applyXray = () => {
+    xraySwaps.forEach((s) => {
+      if (isXray && !s.prepass) {
+        s.prepass = new THREE.Mesh(s.mesh.geometry, xrayDepthMat);
+        s.prepass.renderOrder = 1;
+        s.mesh.add(s.prepass);
+      }
+      if (s.prepass) s.prepass.visible = isXray;
+      s.mesh.material = isXray ? xrayMat : s.original;
+      s.mesh.renderOrder = isXray ? 2 : s.renderOrder;
+    });
+    if (mechanicals) mechanicals.group.visible = isXray;
+  };
+
   // Vanquish & DB12 GLBs carry fully modelled cabins (real wheel, binnacle, console, seats),
   // so their cockpit POVs stay inside the coachwork instead of swapping to the bespoke cabin.
   const hasNativeCockpit = car.id === 'vanquish' || car.id === 'db12';
@@ -490,6 +544,15 @@ export function buildAstonCar3D(
         }
       });
 
+      // The Valkyrie GLB is posed at ~36° of steering lock; square its front wheels up.
+      if (car.id === 'valkyrie') {
+        for (const side of ['FrontLeftWheel', 'FrontRightWheel']) {
+          const wheel = findNodeByName(glbScene, side);
+          const tyre = findNodeByName(glbScene, `${side}_AstonMartinValkyrieTires_0`);
+          if (wheel && tyre instanceof THREE.Mesh) straightenSteering(glbScene, wheel, tyre);
+        }
+      }
+
       // 2. Rotate 180 deg around Y so Nose faces -Z, Tail faces +Z, Left is -X, Right is +X
       const glbWrapper = new THREE.Group();
       glbScene.rotation.y = Math.PI;
@@ -526,6 +589,7 @@ export function buildAstonCar3D(
             m.emissiveIntensity = isNightLights ? 5.0 : 1.4;
             customHeadlightMats.push(m);
           }
+          if (role === 'rim') xraySolidMats.add(m);
           customClonedMats.push(m);
           atlasMats.set(role, m);
         }
@@ -598,6 +662,14 @@ export function buildAstonCar3D(
             obj.material = sharedAtlasMat(role, origMat);
           }
         } else if (car.id === 'vanquish') {
+          // Engine bay and cabin furniture share trim materials with the body, so pick them by node.
+          if (
+            /engine|intake|exhaust|radiator|subframe|lowerarm|upperarm|tierod|swaybar|steeringbox|spring|shock|diff|seat|steer|dash|console|gauge|pedal|doorpanel|belt|shifter|paddle|hub/i.test(
+              pathName
+            )
+          ) {
+            xraySolidMeshes.add(obj);
+          }
           if (matName === 'amdb11' || matName === 'amdb11_roof') {
             obj.material = paintMat;
           } else if (matName === 'amdb11_caliper') {
@@ -677,6 +749,10 @@ export function buildAstonCar3D(
             }
             obj.material = cloned;
             customClonedMats.push(cloned);
+            // EngineA is the whole bay (inner wings, bulkhead) in one pale mesh: let it ghost so the
+            // procedural V8 reads through it instead of a white mass.
+            if (/Wheel[12]A|InteriorA|TexturedA/i.test(matName)) xraySolidMats.add(cloned);
+            if (/Wheel[12]A/i.test(matName)) wheelCloneMats.add(cloned);
           }
         }
       });
@@ -698,6 +774,19 @@ export function buildAstonCar3D(
       doorLeaves = buildDoorLeaves(glbContainer, glbScene, getDoorSpecs(car.id));
       // The user may have pressed "Open Doors" while the GLB was still streaming in.
       if (doorsWantOpen) retargetDoorLeaves(doorLeaves, true);
+
+      // X-ray targets: every coachwork mesh (door leaves included) that isn't running gear or cabin.
+      glbContainer.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh) || thermalRotorDiscs.includes(obj)) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        if (xraySolidMeshes.has(obj) || mats.some((m) => xraySolidMats.has(m))) return;
+        xraySwaps.push({ mesh: obj, original: obj.material, renderOrder: obj.renderOrder, prepass: null });
+      });
+      // Built after the swap list so the running gear keeps its own materials in X-ray.
+      const wheelCorners = measureWheelCorners(glbContainer, (m) => m === tireMat || wheelCloneMats.has(m), bp);
+      mechanicals = buildMechanicals(car.id, bp, wheelCorners);
+      if (mechanicals) glbContainer.add(mechanicals.group);
+      applyXray();
 
       const wheelNames: Record<string, string[]> = {
         valhalla: ['WheelFL', 'WheelFR', 'WheelBL', 'WheelBR'],
@@ -761,11 +850,9 @@ export function buildAstonCar3D(
       glbScreenMat.needsUpdate = true;
     },
     setXRay: (xray: boolean) => {
+      if (isXray === xray) return;
       isXray = xray;
-      paintMat.transparent = xray;
-      paintMat.opacity = xray ? 0.22 : 1.0;
-      paintMat.depthWrite = !xray;
-      paintMat.needsUpdate = true;
+      applyXray();
     },
     setInteriorMode: (inside: boolean) => {
       if (isInteriorPov === inside) return;
@@ -780,6 +867,7 @@ export function buildAstonCar3D(
     },
     update: (dt: number) => {
       const doorsMoving = updateDoorLeaves(doorLeaves, dt);
+      xrayMat.uniforms.uTime.value += dt;
 
       brakeHeatCurrent += (brakeHeatTarget - brakeHeatCurrent) * Math.min(1, dt * 5.0);
       rotorMat.emissiveIntensity = brakeHeatCurrent;
@@ -798,6 +886,7 @@ export function buildAstonCar3D(
     },
     dispose: () => {
       isDisposed = true;
+      mechanicals?.dispose();
       disposeDoorLeaves(doorLeaves);
       doorLeaves = [];
       cabinResult.dispose();
@@ -824,6 +913,8 @@ export function buildAstonCar3D(
         glbLeatherSecondaryMat,
         glbStitchMat,
         glbScreenMat,
+        xrayMat,
+        xrayDepthMat,
       ].forEach((m) => m.dispose());
     },
   };

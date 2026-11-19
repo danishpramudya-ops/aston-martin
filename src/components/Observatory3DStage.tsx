@@ -273,6 +273,7 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
 
   useEffect(() => {
     car3dRef.current?.setXRay(xrayMode);
+    studioRef.current?.setAmbientOcclusion(!xrayMode);
   }, [xrayMode]);
 
   // Studio lifecycle: one renderer, environment, floor and post pipeline for the component's life.
