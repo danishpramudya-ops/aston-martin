@@ -1608,3 +1608,995 @@ select {
   color: var(--text-muted);
   text-transform: uppercase;
 }
+
+/* ======================== FLAGSHIP LUXURY UPGRADE EXTENSIONS ======================== */
+
+/* Balanced Single-Row Hero CTAs at Desktop Width */
+.hero-cta-row {
+  gap: 10px;
+}
+
+.hero-cta-row .cta-solid,
+.hero-cta-row .cta-ghost {
+  padding: 13px 17px;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+}
+
+/* Champagne Highlight CTA & Test Drive Mode Accent */
+.cta-champagne {
+  border-color: rgba(200, 169, 110, 0.58) !important;
+  color: var(--am-champagne) !important;
+  background: rgba(200, 169, 110, 0.08) !important;
+}
+
+.cta-champagne:hover {
+  background: rgba(200, 169, 110, 0.18) !important;
+  border-color: var(--am-champagne) !important;
+  color: var(--text-primary) !important;
+}
+
+.mode-btn-drive {
+  color: var(--am-champagne);
+}
+
+.mode-btn-drive.active {
+  background: linear-gradient(135deg, #c4d600 0%, #c8a96e 100%);
+  color: #050706;
+  font-weight: 600;
+}
+
+.wheel-grid-2x2 {
+  display: grid !important;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 7px !important;
+}
+
+/* Studio Lighting Mood Strip */
+.hud-top-left {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.studio-mood-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  background: rgba(7, 9, 8, 0.78);
+  border: 1px solid var(--border-hairline);
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+
+.mood-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mood-pill:hover {
+  color: var(--text-primary);
+  border-color: rgba(242, 243, 240, 0.14);
+}
+
+.mood-pill.active {
+  background: rgba(200, 169, 110, 0.14);
+  border-color: rgba(200, 169, 110, 0.55);
+  color: var(--text-primary);
+}
+
+.mood-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* 3D Projected Pins (X-Ray Cutaway & Cockpit Switchgear) */
+.stage-pins-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 7;
+  overflow: hidden;
+}
+
+.stage-3d-pin {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 6px;
+  background: rgba(6, 9, 8, 0.84);
+  border: 1px solid rgba(200, 169, 110, 0.55);
+  color: var(--text-primary);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+  pointer-events: auto;
+  will-change: transform, opacity;
+  transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.stage-3d-pin:hover,
+.stage-3d-pin.active {
+  border-color: var(--am-lime);
+  background: rgba(0, 72, 43, 0.88);
+  box-shadow: 0 0 18px rgba(196, 214, 0, 0.25);
+  z-index: 9;
+}
+
+.stage-3d-pin.xray-pin {
+  border-color: rgba(196, 214, 0, 0.55);
+}
+
+.pin-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--am-champagne);
+  box-shadow: 0 0 0 3px rgba(200, 169, 110, 0.25);
+  animation: pin-breathe 2.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.stage-3d-pin.xray-pin .pin-pulse,
+.stage-3d-pin.active .pin-pulse {
+  background: var(--am-lime);
+  box-shadow: 0 0 0 3px rgba(196, 214, 0, 0.26);
+}
+
+@keyframes pin-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.28);
+    opacity: 1;
+  }
+}
+
+.pin-code {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  color: var(--am-champagne);
+  letter-spacing: 0.1em;
+}
+
+.stage-3d-pin.xray-pin .pin-code,
+.stage-3d-pin.active .pin-code {
+  color: var(--am-lime);
+}
+
+.pin-label {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Floating Cutaway & Switchgear Spec Card inside Viewport */
+.stage-spec-card {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  z-index: 10;
+  width: min(390px, calc(100% - 36px));
+  background: rgba(6, 9, 8, 0.9);
+  border: 1px solid rgba(196, 214, 0, 0.42);
+  border-left: 3px solid var(--am-lime);
+  padding: 15px 18px;
+  backdrop-filter: blur(16px);
+  animation: fadeSlideUp 0.25s var(--ease-atelier);
+}
+
+.stage-spec-card.switchgear-card {
+  border-color: rgba(200, 169, 110, 0.45);
+  border-left: 3px solid var(--am-champagne);
+}
+
+.stage-spec-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.stage-spec-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--am-lime);
+}
+
+.switchgear-card .stage-spec-code {
+  color: var(--am-champagne);
+}
+
+.stage-spec-title {
+  margin: 4px 0 0;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 1.15;
+  color: var(--text-primary);
+}
+
+.stage-spec-close {
+  background: none;
+  border: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  padding: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.stage-spec-close:hover {
+  color: var(--text-primary);
+  border-color: var(--am-champagne);
+}
+
+.stage-spec-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--am-champagne);
+  margin-bottom: 8px;
+}
+
+.stage-spec-live-badge {
+  display: inline-block;
+  margin-bottom: 8px;
+  padding: 4px 9px;
+  background: rgba(0, 72, 43, 0.45);
+  border: 1px solid rgba(196, 214, 0, 0.45);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--am-lime);
+}
+
+.stage-spec-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+/* ======================== PROVING GROUND DRIVING SIMULATOR ======================== */
+.studio-viewport.drive-viewport {
+  min-height: 480px;
+  max-height: 590px;
+}
+
+.drive-cluster-overlay {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  z-index: 9;
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) auto minmax(205px, 1fr);
+  align-items: end;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.drive-wing-card {
+  background: rgba(6, 9, 8, 0.8);
+  border: 1px solid rgba(200, 169, 110, 0.26);
+  padding: 11px 13px;
+  backdrop-filter: blur(12px);
+}
+
+.drive-wing-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  color: var(--am-champagne);
+  border-bottom: 1px solid rgba(242, 243, 240, 0.08);
+  padding-bottom: 6px;
+  margin-bottom: 7px;
+  text-transform: uppercase;
+}
+
+.drive-mode-pill {
+  padding: 2px 6px;
+  background: rgba(196, 214, 0, 0.15);
+  border: 1px solid rgba(196, 214, 0, 0.5);
+  color: var(--am-lime);
+  font-size: 8px;
+}
+
+.drive-metric-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2.5px 0;
+}
+
+.drive-metric-k {
+  color: var(--text-muted);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.drive-metric-v {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.drive-metric-v.accent {
+  color: var(--am-lime);
+}
+
+/* Center Digital Radial Tachometer */
+.drive-tacho-core {
+  position: relative;
+  width: 214px;
+  padding: 10px 14px 10px;
+  background: rgba(5, 8, 7, 0.88);
+  border: 1px solid rgba(200, 169, 110, 0.42);
+  backdrop-filter: blur(14px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+.drive-tacho-core.near-redline {
+  border-color: rgba(224, 62, 62, 0.85);
+  box-shadow: 0 0 24px rgba(224, 62, 62, 0.3);
+}
+
+.drive-shift-ladder {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+.shift-led {
+  width: 12px;
+  height: 4px;
+  background: rgba(242, 243, 240, 0.1);
+}
+
+.shift-led.lit.led-lime {
+  background: #c4d600;
+  box-shadow: 0 0 8px #c4d600;
+}
+
+.shift-led.lit.led-amber {
+  background: #f59e0b;
+  box-shadow: 0 0 8px #f59e0b;
+}
+
+.shift-led.lit.led-red {
+  background: #ef4444;
+  box-shadow: 0 0 10px #ef4444;
+}
+
+.drive-tacho-svg {
+  width: 174px;
+  height: 106px;
+  display: block;
+}
+
+.drive-tacho-readout {
+  position: absolute;
+  top: 40px;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.drive-gear-badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  padding: 1px 7px;
+  background: rgba(0, 72, 43, 0.55);
+  border: 1px solid rgba(196, 214, 0, 0.4);
+  margin-bottom: 2px;
+}
+
+.drive-gear-tag {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--am-champagne);
+}
+
+.drive-gear-num {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--am-lime);
+}
+
+.drive-speed-big {
+  font-family: var(--font-mono);
+  font-size: 32px;
+  line-height: 1;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.drive-speed-unit {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.12em;
+  color: var(--text-secondary);
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* G-Force Circle & Pedal Bars */
+.drive-dynamics-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.g-circle-wrap {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 1px solid rgba(200, 169, 110, 0.35);
+  background: rgba(4, 6, 5, 0.85);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.g-circle-ring {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px dashed rgba(242, 243, 240, 0.16);
+}
+
+.g-circle-cross-h,
+.g-circle-cross-v {
+  position: absolute;
+  background: rgba(242, 243, 240, 0.1);
+}
+
+.g-circle-cross-h {
+  width: 100%;
+  height: 1px;
+}
+
+.g-circle-cross-v {
+  width: 1px;
+  height: 100%;
+}
+
+.g-circle-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--am-lime);
+  box-shadow: 0 0 8px var(--am-lime);
+  transition: transform 0.06s linear;
+}
+
+.g-circle-label {
+  position: absolute;
+  bottom: -14px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: var(--am-champagne);
+  font-variant-numeric: tabular-nums;
+}
+
+.drive-bars-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.drive-bar-lbl {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+
+.drive-bar-track {
+  height: 5px;
+  background: rgba(242, 243, 240, 0.1);
+  overflow: hidden;
+}
+
+.drive-bar-fill {
+  height: 100%;
+  transition: width 0.05s linear;
+}
+
+.drive-bar-fill.thr {
+  background: var(--am-lime);
+}
+
+.drive-bar-fill.brk {
+  background: #ef4444;
+}
+
+.drive-bar-fill.kers {
+  background: linear-gradient(90deg, #38bdf8, #c4d600);
+}
+
+/* Proving Ground Bottom Interactive Control Deck */
+.drive-control-deck {
+  border-top: 1px solid var(--border-hairline);
+  background: var(--bg-surface);
+  padding: 12px 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.drive-deck-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.drive-pedal-cluster,
+.drive-paddle-cluster,
+.drive-meta-cluster,
+.drive-cam-group,
+.drive-mode-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.drive-pedal-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 13px;
+  background: rgba(7, 9, 8, 0.85);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.14s ease;
+}
+
+.drive-pedal-btn:hover {
+  border-color: var(--am-champagne);
+}
+
+.drive-pedal-btn.throttle {
+  border-color: rgba(196, 214, 0, 0.45);
+  color: var(--am-lime);
+}
+
+.drive-pedal-btn.throttle.active,
+.drive-pedal-btn.throttle:active {
+  background: var(--am-lime);
+  color: #050706;
+  font-weight: 600;
+}
+
+.drive-pedal-btn.brake {
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #f87171;
+}
+
+.drive-pedal-btn.brake.active,
+.drive-pedal-btn.brake:active {
+  background: #dc2626;
+  color: #fff;
+}
+
+.drive-pedal-btn.steer.active,
+.drive-pedal-btn.steer:active {
+  background: var(--am-green);
+  border-color: var(--am-lime);
+}
+
+.drive-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 9px;
+  background: rgba(7, 9, 8, 0.72);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.drive-chip-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--am-champagne);
+}
+
+.drive-chip-btn.active {
+  background: var(--am-green);
+  border-color: var(--am-lime);
+  color: var(--text-primary);
+}
+
+.drive-chip-btn.kers-btn {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #7dd3fc;
+}
+
+.drive-chip-btn.kers-btn.active {
+  background: rgba(56, 189, 248, 0.25);
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.drive-kbd-hint {
+  border-top: 1px dashed rgba(242, 243, 240, 0.07);
+  padding-top: 7px;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+@media (max-width: 900px) {
+  .drive-cluster-overlay {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .drive-tacho-core {
+    width: 100%;
+  }
+}
+
+/* ======================== SADDLERY & TACTILE SWITCHGEAR ATELIER ======================== */
+.switchgear-atelier-viewport {
+  min-height: 500px;
+  max-height: none !important;
+  aspect-ratio: auto !important;
+}
+
+.switchgear-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.switchgear-subtitle {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.switchgear-btn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(135px, 1fr));
+  gap: 8px;
+}
+
+.tactile-switch-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 10px 11px;
+  background: rgba(7, 9, 8, 0.82);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tactile-switch-tile:hover {
+  border-color: var(--am-champagne);
+  transform: translateY(-1px);
+}
+
+.tactile-switch-tile.active {
+  background: rgba(0, 72, 43, 0.34);
+  border-color: var(--am-lime);
+  box-shadow: inset 0 0 0 1px rgba(196, 214, 0, 0.2);
+}
+
+.tactile-switch-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.14em;
+}
+
+.tactile-switch-code {
+  color: var(--am-champagne);
+}
+
+.tactile-switch-tile.active .tactile-switch-code {
+  color: var(--am-lime);
+}
+
+.tactile-switch-zone {
+  color: var(--text-muted);
+}
+
+.tactile-switch-name {
+  font-family: var(--font-display);
+  font-size: 17px;
+  line-height: 1.15;
+  color: var(--text-primary);
+}
+
+.tactile-switch-force {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  color: var(--text-muted);
+}
+
+.switchgear-detail-box {
+  border: 1px solid var(--border-gold);
+  background: rgba(5, 8, 7, 0.9);
+  padding: 14px 16px;
+}
+
+.switchgear-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.switchgear-detail-title {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 400;
+  color: var(--text-primary);
+}
+
+.switchgear-detail-mat {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--am-champagne);
+  letter-spacing: 0.08em;
+  margin-top: 2px;
+}
+
+.switchgear-modes-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.switchgear-mode-tag {
+  padding: 2px 7px;
+  border: 1px solid rgba(200, 169, 110, 0.35);
+  background: rgba(200, 169, 110, 0.08);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.12em;
+  color: var(--text-primary);
+}
+
+.switchgear-detail-desc {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.switchgear-tactile-note {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-muted);
+  border-top: 1px dashed rgba(242, 243, 240, 0.09);
+  padding-top: 7px;
+}
+
+.switchgear-tactile-note span {
+  color: var(--text-primary);
+}
+
+.saddlery-right-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.saddlery-hide-card,
+.saddlery-elements-card {
+  border: 1px solid var(--border-hairline);
+  background: rgba(7, 9, 8, 0.78);
+  padding: 14px 16px;
+}
+
+@media (max-width: 900px) {
+  .switchgear-atelier-viewport {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ======================== DEEP POWERTRAIN ARCHITECTURE DOSSIER ======================== */
+.powertrain-blueprint-card {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--border-hairline);
+  padding: 26px 28px;
+  background: linear-gradient(180deg, rgba(0, 72, 43, 0.1) 0%, rgba(7, 9, 8, 0.96) 100%);
+}
+
+.powertrain-blueprint-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.powertrain-blueprint-title {
+  margin: 6px 0 0;
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 300;
+  color: var(--text-primary);
+}
+
+.powertrain-spec-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--border-hairline);
+  border-left: 1px solid var(--border-hairline);
+}
+
+.pt-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 13px 16px;
+  border-right: 1px solid var(--border-hairline);
+  border-bottom: 1px solid var(--border-hairline);
+  background: rgba(7, 9, 8, 0.72);
+}
+
+.pt-k {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.pt-v {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.pt-v.accent {
+  color: var(--am-lime);
+}
+
+@media (max-width: 900px) {
+  .powertrain-spec-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ======================== UPGRADED Q COMMISSION DOSSIER ======================== */
+.dossier-snapshot-wrap {
+  margin-bottom: 18px;
+  border: 1px solid var(--border-gold);
+  background: #050706;
+  overflow: hidden;
+}
+
+.dossier-snapshot-img {
+  width: 100%;
+  max-height: 245px;
+  object-fit: cover;
+  display: block;
+}
+
+.dossier-snapshot-caption {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-top: 1px solid var(--border-hairline);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: var(--am-champagne);
+  background: rgba(7, 9, 8, 0.92);
+}
+
+.dossier-valuation-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.dossier-total-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-gold);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--am-champagne);
+}
+
+.dossier-total-val {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 400;
+  color: var(--am-lime);
+  letter-spacing: 0.02em;
+}
+
+@media (max-width: 720px) {
+  .dossier-valuation-grid {
+    grid-template-columns: 1fr;
+  }
+}
+

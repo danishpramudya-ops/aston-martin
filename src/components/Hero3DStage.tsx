@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import type { AstonCar, QCabinTrim, QCaliperFinish, QPaintFinish } from '../data/cars';
+import type { QWheelFinish } from '../data/engineeringData';
 import { buildAstonCar3D, preloadCarModel, type Car3DInstance } from '../three/buildCar3D';
 import { Studio } from '../three/studio';
 import * as THREE from 'three';
@@ -8,6 +9,7 @@ interface Hero3DStageProps {
   car: AstonCar;
   paint: QPaintFinish;
   caliper: QCaliperFinish;
+  wheelFinish?: QWheelFinish;
   cabinTrim: QCabinTrim;
 }
 
@@ -16,16 +18,18 @@ interface Hero3DStageProps {
  * Shares the Observatory's studio pipeline (light-studio IBL, polished floor, bloom) and
  * pauses rendering via IntersectionObserver once scrolled out of view.
  */
-export const Hero3DStage: React.FC<Hero3DStageProps> = ({ car, paint, caliper, cabinTrim }) => {
+export const Hero3DStage: React.FC<Hero3DStageProps> = ({ car, paint, caliper, wheelFinish, cabinTrim }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const studioRef = useRef<Studio | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const car3dRef = useRef<Car3DInstance | null>(null);
   const paintRef = useRef(paint);
   const caliperRef = useRef(caliper);
+  const wheelFinishRef = useRef(wheelFinish);
   const cabinTrimRef = useRef(cabinTrim);
   paintRef.current = paint;
   caliperRef.current = caliper;
+  wheelFinishRef.current = wheelFinish;
   cabinTrimRef.current = cabinTrim;
 
   useEffect(() => {
@@ -35,6 +39,10 @@ export const Hero3DStage: React.FC<Hero3DStageProps> = ({ car, paint, caliper, c
   useEffect(() => {
     car3dRef.current?.setCaliper(caliper);
   }, [caliper]);
+
+  useEffect(() => {
+    if (wheelFinish) car3dRef.current?.setWheelFinish(wheelFinish);
+  }, [wheelFinish]);
 
   useEffect(() => {
     car3dRef.current?.setCabinTrim(cabinTrim);
@@ -130,6 +138,7 @@ export const Hero3DStage: React.FC<Hero3DStageProps> = ({ car, paint, caliper, c
         }
         incoming.setPaint(paintRef.current);
         incoming.setCaliper(caliperRef.current);
+        if (wheelFinishRef.current) incoming.setWheelFinish(wheelFinishRef.current);
         incoming.setCabinTrim(cabinTrimRef.current);
         studio.scene.add(incoming.root);
         car3dRef.current = incoming;

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import type { AstonCar, QCabinTrim, QCaliperFinish, QPaintFinish } from '../data/cars';
+import type { QWheelFinish } from '../data/engineeringData';
 import { buildCabin3D, type Cabin3DResult } from './cabinBuilder';
 import { getBlueprintForCar, type Car3DBlueprint } from './carProfiles';
 import {
@@ -23,6 +24,7 @@ export interface Car3DInstance {
   blueprint: Car3DBlueprint;
   setPaint: (paint: QPaintFinish) => void;
   setCaliper: (caliper: QCaliperFinish) => void;
+  setWheelFinish: (wheel: QWheelFinish) => void;
   setCabinTrim: (trim: QCabinTrim) => void;
   setDoorsOpen: (open: boolean) => void;
   setLightsMode: (nightMode: boolean) => void;
@@ -30,6 +32,7 @@ export interface Car3DInstance {
   setInteriorMode: (inside: boolean) => void;
   setActiveAero: (speedKmh: number) => void;
   setBrakeThermal: (tempNorm: number) => void;
+  setDriveDynamics: (pitchRad: number, rollRad: number, braking01: number, rpmNorm: number) => void;
   /** Resolves once the GLB coachwork is mounted, shaded and rigged (rejects on load failure). */
   ready: Promise<void>;
   /** Advances animation; returns true while any door leaf is still moving. */
@@ -470,7 +473,30 @@ export function buildAstonCar3D(
   // so their cockpit POVs stay inside the coachwork instead of swapping to the bespoke cabin.
   const hasNativeCockpit = car.id === 'vanquish' || car.id === 'db12';
 
+  // Warm studio interior fill lights so real GLB cabins (DB12 & Vanquish) reveal every leather stitch
+  // and machined metal switch when stepping into 06 Driver POV / 07 HMI Console / 08 Cabin Sweep.
+  const cabinDomeLight = new THREE.PointLight('#fff4e2', 0, 2.8, 1.35);
+  cabinDomeLight.position.set(0, bp.windscreenTopY - 0.14, (bp.dashZ + bp.eyeZ) * 0.5 + 0.08);
+  root.add(cabinDomeLight);
+
+  const dashFillLight = new THREE.PointLight('#d6ebff', 0, 1.8, 1.5);
+  dashFillLight.position.set(bp.driverX * 0.5, bp.wheelY + 0.18, bp.dashZ + 0.18);
+  root.add(dashFillLight);
+
+  let drivePitchTarget = 0;
+  let driveRollTarget = 0;
+  let drivePitchCurrent = 0;
+  let driveRollCurrent = 0;
+  let driveBraking = 0;
+  let driveRpmNorm = 0;
+  let driveVibPhase = 0;
+  const valhallaRimMats: THREE.MeshStandardMaterial[] = [];
+
   function syncInteriorExteriorVisibility() {
+    const showNativeLights = isInteriorPov && hasNativeCockpit;
+    cabinDomeLight.intensity = showNativeLights ? (isNightLights ? 2.4 : 1.95) : 0;
+    dashFillLight.intensity = showNativeLights ? (isNightLights ? 1.55 : 0.95) : 0;
+
     if (isInteriorPov && hasNativeCockpit) {
       glbContainer.visible = true;
       cabinResult.group.visible = false;
@@ -659,7 +685,9 @@ export function buildAstonCar3D(
           } else if (origMat instanceof THREE.MeshStandardMaterial && origMat.map) {
             // Material.002 atlas (rims, headlamp internals, grille & badging)
             const role = /Wheel.*_rims/i.test(pathName) ? 'rim' : isValhallaHeadlamp(obj) ? 'lamp' : 'trim';
-            obj.material = sharedAtlasMat(role, origMat);
+            const mat = sharedAtlasMat(role, origMat);
+            obj.material = mat;
+            if (role === 'rim' && !valhallaRimMats.includes(mat)) valhallaRimMats.push(mat);
           }
         } else if (car.id === 'vanquish') {
           // Engine bay and cabin furniture share trim materials with the body, so pick them by node.
@@ -791,6 +819,8 @@ export function buildAstonCar3D(
       const wheelNames: Record<string, string[]> = {
         valhalla: ['WheelFL', 'WheelFR', 'WheelBL', 'WheelBR'],
         db12: ['Wheel2A_LF_24', 'Wheel2A_RF_25', 'Wheel1A_LR_26', 'Wheel1A_RR_27'],
+        valkyrie: ['FrontLeftWheel', 'FrontRightWheel', 'RearLeftWheel', 'RearRightWheel'],
+        vanquish: ['amdb11_wheel_03', 'amdb11_wheel_03.001', 'amdb11_wheel_03.002', 'amdb11_wheel_03.003'],
       };
       (wheelNames[car.id] || []).forEach((wName) => {
         const wNode = findNodeByName(glbScene, wName);
@@ -813,6 +843,34 @@ export function buildAstonCar3D(
     setCaliper: (caliper: QCaliperFinish) => {
       caliperMat.color.set(caliper.hex);
       caliperMat.needsUpdate = true;
+    },
+    setWheelFinish: (wheel: QWheelFinish) => {
+      const tint = new THREE.Color(wheel.hex);
+      wheelAlloyMat.color.copy(tint);
+      wheelAlloyMat.metalness = wheel.metalness;
+      wheelAlloyMat.roughness = wheel.roughness;
+      wheelAlloyMat.needsUpdate = true;
+
+      // Dark spoke accents shift softly toward chosen wheel finish on Valkyrie
+      darkAlloyMat.color.copy(tint).multiplyScalar(wheel.id === 'gloss-obsidian' ? 0.65 : 0.42);
+      darkAlloyMat.roughness = wheel.roughness + 0.06;
+      darkAlloyMat.needsUpdate = true;
+
+      // Textured rim materials on DB12 & Valhalla tint subtly via color multiplier
+      wheelCloneMats.forEach((m) => {
+        if (m instanceof THREE.MeshStandardMaterial) {
+          m.color.copy(tint).lerp(new THREE.Color('#ffffff'), wheel.id === 'gloss-obsidian' ? 0.12 : 0.35);
+          m.metalness = wheel.metalness;
+          m.roughness = wheel.roughness;
+          m.needsUpdate = true;
+        }
+      });
+      valhallaRimMats.forEach((m) => {
+        m.color.copy(tint).lerp(new THREE.Color('#ffffff'), wheel.id === 'gloss-obsidian' ? 0.18 : 0.38);
+        m.metalness = wheel.metalness;
+        m.roughness = wheel.roughness;
+        m.needsUpdate = true;
+      });
     },
     setCabinTrim: (trim: QCabinTrim) => {
       cabinResult.updateTrim(trim);
@@ -842,6 +900,7 @@ export function buildAstonCar3D(
         m.emissiveIntensity = nightMode ? 5.0 : 1.4;
       });
       cabinResult.setLightsMode(nightMode);
+      syncInteriorExteriorVisibility();
 
       const nextCluster = createClusterTexture(car, nightMode);
       glbClusterTex.dispose();
@@ -865,9 +924,30 @@ export function buildAstonCar3D(
     setBrakeThermal: (tempNorm: number) => {
       brakeHeatTarget = Math.max(0, Math.min(2.2, tempNorm));
     },
+    setDriveDynamics: (pitchRad: number, rollRad: number, braking01: number, rpmNorm: number) => {
+      drivePitchTarget = pitchRad;
+      driveRollTarget = rollRad;
+      driveBraking = Math.max(0, Math.min(1, braking01));
+      driveRpmNorm = Math.max(0, Math.min(1, rpmNorm));
+    },
     update: (dt: number) => {
       const doorsMoving = updateDoorLeaves(doorLeaves, dt);
       xrayMat.uniforms.uTime.value += dt;
+
+      // Smooth suspension pitch (squat/dive) & cornering roll + subtle engine idle/rev tremor
+      drivePitchCurrent += (drivePitchTarget - drivePitchCurrent) * Math.min(1, dt * 8.0);
+      driveRollCurrent += (driveRollTarget - driveRollCurrent) * Math.min(1, dt * 7.5);
+      driveVibPhase += dt * (28 + driveRpmNorm * 95);
+      const vib = driveRpmNorm > 0.01 ? Math.sin(driveVibPhase) * 0.00055 * (0.4 + driveRpmNorm * 0.6) : 0;
+      glbContainer.rotation.x = drivePitchCurrent;
+      glbContainer.rotation.z = driveRollCurrent;
+      glbContainer.position.y = vib;
+      cabinResult.group.rotation.x = drivePitchCurrent * 0.85;
+      cabinResult.group.rotation.z = driveRollCurrent * 0.85;
+
+      // Tail-blade brake light flare under hard deceleration
+      const baseTail = isNightLights ? 6.5 : 2.4;
+      tailBladeMat.emissiveIntensity = baseTail + driveBraking * 6.5;
 
       brakeHeatCurrent += (brakeHeatTarget - brakeHeatCurrent) * Math.min(1, dt * 5.0);
       rotorMat.emissiveIntensity = brakeHeatCurrent;
@@ -879,7 +959,12 @@ export function buildAstonCar3D(
         const angular = (aeroSpeed / 3.6) * dt;
         wheelSpinNodes.forEach((wNode, idx) => {
           const r = idx < 2 ? bp.wheelRadiusF : bp.wheelRadiusR;
-          wNode.rotation.x += angular / r;
+          if (car.id === 'valkyrie') {
+            // Valkyrie wheel bones use local Z/Y depending on FBX orientation; spin smoothly
+            wNode.rotation.z += angular / r;
+          } else {
+            wNode.rotation.x += angular / r;
+          }
         });
       }
       return doorsMoving;

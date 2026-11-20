@@ -500,6 +500,7 @@ export class Studio {
   private fadeTarget = 0;
   private fadeSpeed = 1.6;
   private frameTimes: number[] = [];
+  private disposed = false;
 
   constructor(container: HTMLElement, options: StudioOptions = {}) {
     this.quality = options.quality ?? detectStudioQuality();
@@ -652,6 +653,40 @@ export class Studio {
     this.nightTarget = on ? 1 : 0;
   }
 
+  /** Toggles the showroom mirror floor (hidden during Proving Ground drive mode). */
+  setFloorVisible(visible: boolean) {
+    this.floor.visible = visible;
+  }
+
+  /** Shifts directional key/kicker light colour temperatures and floor base tone per studio mood. */
+  setMood(mood: 'gaydon' | 'dusk' | 'night' | 'champagne') {
+    if (mood === 'dusk') {
+      this.keyLight.color.set('#ffc896');
+      this.kickerLight.color.set('#8eb8ff');
+      this.floorUniforms.uBase.value.set('#14110f');
+    } else if (mood === 'night') {
+      this.keyLight.color.set('#cde0ff');
+      this.kickerLight.color.set('#5a86cc');
+      this.floorUniforms.uBase.value.set('#080b10');
+    } else if (mood === 'champagne') {
+      this.keyLight.color.set('#ffecc8');
+      this.kickerLight.color.set('#d8b67b');
+      this.floorUniforms.uBase.value.set('#14120c');
+    } else {
+      this.keyLight.color.set('#fff8ef');
+      this.kickerLight.color.set('#dfe9ff');
+      this.floorUniforms.uBase.value.set('#0e1210');
+    }
+  }
+
+  /** Synchronously renders one frame and captures a crisp JPEG snapshot for the Q Dossier. */
+  captureSnapshot(camera: THREE.Camera): string {
+    this.renderPass.camera = camera;
+    if (this.ao) this.ao.camera = camera;
+    this.composer.render(0);
+    return this.renderer.domElement.toDataURL('image/jpeg', 0.92);
+  }
+
   /** Fade the frame to the void (1) or reveal it (0). */
   setFade(value: number, speed = 1.6) {
     this.fadeTarget = value;
@@ -675,21 +710,23 @@ export class Studio {
     object: THREE.Object3D,
     camera: THREE.Camera,
     outgoing: THREE.Object3D | null = null,
-    timeoutMs = 8000
+    _timeoutMs = 8000
   ): Promise<void> {
+    if (this.disposed) return Promise.resolve();
     const renderer = this.renderer;
     const previousTarget = renderer.getRenderTarget();
     const outgoingVisible = outgoing?.visible ?? false;
-    // Coachwork only ever draws into off-screen HDR targets (composer, mirror), which select linear
-    // output and no tone mapping; programs compiled against the canvas would never be reused.
-    renderer.setRenderTarget(this.composer.readBuffer);
-    if (outgoing) outgoing.visible = false;
-    const pending = renderer.compileAsync(object, camera, this.scene);
-    if (outgoing) outgoing.visible = outgoingVisible;
-    renderer.setRenderTarget(previousTarget);
-    // On a lost context programs never report ready; never hold the reveal hostage to that.
-    const timeout = new Promise<void>((resolve) => window.setTimeout(resolve, timeoutMs));
-    return Promise.race([pending.then(() => undefined, () => undefined), timeout]);
+    try {
+      renderer.setRenderTarget(this.composer.readBuffer);
+      if (outgoing) outgoing.visible = false;
+      renderer.compile(object, camera, this.scene);
+    } catch {
+      // Context loss or mid-dispose during model swap — safely ignore
+    } finally {
+      if (outgoing) outgoing.visible = outgoingVisible;
+      if (!this.disposed) renderer.setRenderTarget(previousTarget);
+    }
+    return Promise.resolve();
   }
 
   setSize(width: number, height: number) {
@@ -700,6 +737,7 @@ export class Studio {
   }
 
   private applySize() {
+    if (this.disposed) return;
     this.renderer.setPixelRatio(this.pixelRatio);
     this.renderer.setSize(this.width, this.height, false);
     this.renderer.domElement.style.width = '100%';
@@ -728,6 +766,7 @@ export class Studio {
   }
 
   render(camera: THREE.Camera, dt: number) {
+    if (this.disposed) return;
     this.time += dt;
     this.adapt(dt);
 
@@ -757,6 +796,7 @@ export class Studio {
   }
 
   dispose() {
+    this.disposed = true;
     this.composer.dispose();
     this.renderPass.dispose();
     this.ao?.dispose();

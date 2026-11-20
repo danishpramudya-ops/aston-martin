@@ -1,19 +1,23 @@
 import React, { useEffect, useState } from 'react';
-import { Gauge, Play, Square, Volume2 } from 'lucide-react';
+import { Cpu, Gauge, Layers, Play, Square, Volume2 } from 'lucide-react';
 import { ASTON_CARS, type AstonCar } from '../data/cars';
-import { engineAudio } from '../audio/engineAudio';
+import { POWERTRAIN_DEEP_SPECS } from '../data/engineeringData';
+import { engineAudio, type ExhaustValveMode } from '../audio/engineAudio';
 
 interface DynoTelemetryLabProps {
   activeCar: AstonCar;
+  onInspectXray?: () => void;
 }
 
-export const DynoTelemetryLab: React.FC<DynoTelemetryLabProps> = ({ activeCar }) => {
+export const DynoTelemetryLab: React.FC<DynoTelemetryLabProps> = ({ activeCar, onInspectXray }) => {
   const [compareId, setCompareId] = useState<string>(() => (activeCar.id === 'valkyrie' ? 'vanquish' : 'valkyrie'));
   const [metric, setMetric] = useState<'power' | 'torque'>('power');
   const [audioRunning, setAudioRunning] = useState(false);
+  const [exhaustMode, setExhaustMode] = useState<ExhaustValveMode>('SPORT');
   const [rpm, setRpm] = useState(1400);
 
   const compareCar = ASTON_CARS.find((c) => c.id === compareId) || ASTON_CARS[0];
+  const deepSpec = POWERTRAIN_DEEP_SPECS[activeCar.id] || POWERTRAIN_DEEP_SPECS.valkyrie;
 
   useEffect(() => {
     if (activeCar.id === compareId) {
@@ -33,9 +37,16 @@ export const DynoTelemetryLab: React.FC<DynoTelemetryLabProps> = ({ activeCar })
       engineAudio.stop();
       setAudioRunning(false);
     } else {
-      engineAudio.start(activeCar.topology, rpm);
+      engineAudio.setExhaustValve(exhaustMode);
+      engineAudio.triggerColdStart(activeCar.topology, rpm);
       setAudioRunning(true);
     }
+  };
+
+  const handleExhaustChange = (next: ExhaustValveMode) => {
+    engineAudio.playSwitchClick(false);
+    setExhaustMode(next);
+    engineAudio.setExhaustValve(next);
   };
 
   const handleBlip = () => {
@@ -287,12 +298,33 @@ export const DynoTelemetryLab: React.FC<DynoTelemetryLabProps> = ({ activeCar })
             <span>1,100 IDLE</span>
             <span>{activeCar.specs.redlineRpm.toLocaleString()} REDLINE</span>
           </div>
+
+          {/* Active Exhaust Bypass Valve Selector */}
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid var(--border-hairline)' }}>
+            <div className="inspector-block-title" style={{ marginBottom: 8 }}>
+              <span>Exhaust Bypass Valve</span>
+              <span>{exhaustMode}</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+              {(['QUIET', 'SPORT', 'TRACK'] as ExhaustValveMode[]).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  className={`caliper-chip ${exhaustMode === v ? 'active' : ''}`}
+                  style={{ justifyContent: 'center' }}
+                  onClick={() => handleExhaustChange(v)}
+                >
+                  <span>{v}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
           <button
             type="button"
-            className={`cta-solid`}
+            className="cta-solid"
             style={{
               flex: 1,
               justifyContent: 'center',
@@ -303,11 +335,74 @@ export const DynoTelemetryLab: React.FC<DynoTelemetryLabProps> = ({ activeCar })
             onClick={toggleAudio}
           >
             {audioRunning ? <Square size={13} /> : <Play size={13} />}
-            <span>{audioRunning ? 'Engine Stop' : 'Start Engine'}</span>
+            <span>{audioRunning ? 'Engine Stop' : 'Cold-Start Ignition'}</span>
           </button>
           <button type="button" className="cta-ghost" onClick={handleBlip}>
             <span>Rev Blip</span>
           </button>
+        </div>
+      </div>
+
+      {/* Full-Width Deep Powertrain Engineering Blueprint */}
+      <div className="powertrain-blueprint-card">
+        <div className="powertrain-blueprint-head">
+          <div>
+            <div className="inspector-category" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Cpu size={12} /> GAYDON ENGINE ARCHITECTURE DOSSIER // {deepSpec.codeName}
+            </div>
+            <h3 className="powertrain-blueprint-title">{deepSpec.architecture}</h3>
+          </div>
+          {onInspectXray && (
+            <button type="button" className="cta-ghost" onClick={onInspectXray}>
+              <Layers size={13} />
+              <span>Inspect in 3D X-Ray Cutaway</span>
+            </button>
+          )}
+        </div>
+
+        <div className="powertrain-spec-grid">
+          <div className="pt-cell">
+            <span className="pt-k">Displacement &amp; Bore × Stroke</span>
+            <span className="pt-v">
+              {deepSpec.displacementCc} · {deepSpec.boreStrokeMm}
+            </span>
+          </div>
+          <div className="pt-cell">
+            <span className="pt-k">Compression Ratio</span>
+            <span className="pt-v">{deepSpec.compressionRatio}</span>
+          </div>
+          <div className="pt-cell">
+            <span className="pt-k">Firing Order</span>
+            <span className="pt-v accent">{deepSpec.firingOrder}</span>
+          </div>
+          <div className="pt-cell">
+            <span className="pt-k">Specific Output</span>
+            <span className="pt-v">{deepSpec.specificOutput}</span>
+          </div>
+          <div className="pt-cell">
+            <span className="pt-k">Valvetrain &amp; Internals</span>
+            <span className="pt-v">{deepSpec.valvetrain}</span>
+          </div>
+          <div className="pt-cell">
+            <span className="pt-k">Induction &amp; Forced Charging</span>
+            <span className="pt-v">{deepSpec.induction}</span>
+          </div>
+          <div className="pt-cell">
+            <span className="pt-k">Hybrid / Electric Architecture</span>
+            <span className="pt-v">{deepSpec.hybridSystem}</span>
+          </div>
+          <div className="pt-cell">
+            <span className="pt-k">Transmission &amp; Differential</span>
+            <span className="pt-v">
+              {deepSpec.transmissionDetail} · {deepSpec.differential}
+            </span>
+          </div>
+          <div className="pt-cell">
+            <span className="pt-k">Lubrication &amp; Thermal Cooling</span>
+            <span className="pt-v">
+              {deepSpec.lubrication} · {deepSpec.coolingDetail}
+            </span>
+          </div>
         </div>
       </div>
     </div>
