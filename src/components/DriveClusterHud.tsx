@@ -52,6 +52,13 @@ const shallowEqual = <T extends object>(a: T, b: T) => {
   return ka.every((k) => Object.is(a[k], b[k]));
 };
 
+const MODE_HINTS: Record<string, string> = {
+  GT: 'GT – softest suspension, full stability and traction control',
+  SPORT: 'SPORT – balanced: assists catch slides early',
+  'SPORT+': 'SPORT+ – lighter assists: handbrake drifts allowed, traction control on the limit',
+  TRACK: 'TRACK – assists off: feed the throttle in or the rear will step out',
+};
+
 const boostLabel = (car: AstonCar) => (car.id === 'valkyrie' ? 'KERS' : car.id === 'valhalla' ? 'E-BOOST' : 'OVERBOOST');
 
 /* ------------------------------------------------------------------------------------------------
@@ -431,7 +438,13 @@ export const DriveControlDeck: React.FC<{ game: DriveGame | null; car: AstonCar;
           </div>
           <div className="drive-mode-group" role="group" aria-label="Drive mode">
             {physics.driveModes.filter((m) => DRIVE_MODES.includes(m)).map((m) => (
-              <button key={m} type="button" className={`drive-chip-btn ${ui.mode === m ? 'active' : ''}`} onClick={click(() => game.setMode(m))}>
+              <button
+                key={m}
+                type="button"
+                className={`drive-chip-btn ${ui.mode === m ? 'active' : ''}`}
+                onClick={click(() => game.setMode(m))}
+                title={MODE_HINTS[m]}
+              >
                 {m}
               </button>
             ))}

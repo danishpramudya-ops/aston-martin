@@ -78,6 +78,9 @@ export class DriveInput {
   private keys = emptyControls();
   private touch = emptyControls();
   private steer = 0;
+  private steerVel = 0;
+  private throttle = 0;
+  private brake = 0;
   private padPrev: boolean[] = [];
   private attached = false;
 
@@ -139,6 +142,9 @@ export class DriveInput {
     this.keys = emptyControls();
     this.touch = emptyControls();
     this.steer = 0;
+    this.steerVel = 0;
+    this.throttle = 0;
+    this.brake = 0;
   }
 
   /** On-screen pedal / steering buttons. */
@@ -180,21 +186,35 @@ export class DriveInput {
 
     const k = this.keys;
     const t = this.touch;
-    out.throttle = Math.max(k.throttle || t.throttle ? 1 : 0, padThrottle);
-    out.brake = Math.max(k.brake || t.brake ? 1 : 0, padBrake);
+    // Digital pedals ramp like a foot does (~0.18 s in, ~0.08 s out) instead of slamming 0 ↔ 100 %;
+    // an analog trigger wins whenever it is pressed further.
+    const thrKey = k.throttle || t.throttle ? 1 : 0;
+    const brkKey = k.brake || t.brake ? 1 : 0;
+    this.throttle = approach(this.throttle, thrKey, dt / (thrKey > this.throttle ? 0.18 : 0.08));
+    this.brake = approach(this.brake, brkKey, dt / (brkKey > this.brake ? 0.12 : 0.07));
+    out.throttle = Math.max(this.throttle, padThrottle);
+    out.brake = Math.max(this.brake, padBrake);
     out.handbrake = k.handbrake || t.handbrake || padHandbrake;
     out.boost = k.boost || t.boost || padBoost;
 
     const digital = (k.right || t.right ? 1 : 0) - (k.left || t.left ? 1 : 0);
     if (digital === 0 && Math.abs(padSteer) > 0.001) {
       this.steer += (padSteer - this.steer) * Math.min(1, dt * 18);
+      this.steerVel = 0;
     } else {
-      const reversing = digital !== 0 && this.steer !== 0 && Math.sign(digital) !== Math.sign(this.steer);
-      const speedN = Math.min(1, Math.abs(speedMps) / 60);
-      const rate = digital === 0 ? 7.5 : reversing ? 10 : 6.5 - 3.6 * speedN;
-      const step = Math.max(-rate * dt, Math.min(rate * dt, digital - this.steer));
-      this.steer += step;
+      // Keyboard steering through a critically damped spring: the wheel eases in, settles without
+      // overshoot, and slows down with speed (~0.4 s to full lock at walking pace, ~0.7 s at 300).
+      const speedN = Math.min(1, Math.abs(speedMps) / 70);
+      const reversing = digital !== 0 && Math.sign(digital) !== Math.sign(this.steer) && Math.abs(this.steer) > 0.05;
+      const w = digital === 0 ? 13 : reversing ? 14 : 12 - 5 * speedN;
+      const h = Math.min(dt, 0.034);
+      this.steerVel += (w * w * (digital - this.steer) - 2 * w * this.steerVel) * h;
+      this.steer += this.steerVel * h;
     }
     out.steer = Math.max(-1, Math.min(1, this.steer));
   }
+}
+
+function approach(value: number, target: number, step: number): number {
+  return value < target ? Math.min(target, value + step) : Math.max(target, value - step);
 }

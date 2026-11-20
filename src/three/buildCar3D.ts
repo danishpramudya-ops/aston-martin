@@ -32,7 +32,8 @@ export interface Car3DInstance {
   setInteriorMode: (inside: boolean) => void;
   setActiveAero: (speedKmh: number) => void;
   setBrakeThermal: (tempNorm: number) => void;
-  setDriveDynamics: (pitchRad: number, rollRad: number, braking01: number, rpmNorm: number) => void;
+  /** Sprung-body pose for the drive game: pitch/roll (rad) and heave (m) over planted wheels. */
+  setDriveDynamics: (pitchRad: number, rollRad: number, braking01: number, rpmNorm: number, heaveM?: number) => void;
   /** Front-wheel steering angle for the drive game (rad, + = right). */
   setSteer: (angleRad: number) => void;
   /** Resolves once the GLB coachwork is mounted, shaded and rigged (rejects on load failure). */
@@ -216,6 +217,12 @@ export function buildAstonCar3D(
   const root = new THREE.Group();
   const glbContainer = new THREE.Group();
   root.add(glbContainer);
+  // Unsprung parts: the four wheel assemblies are lifted out of the body (see the GLB load), so the
+  // body can pitch and roll over planted wheels like a real suspension instead of tilting as one.
+  const wheelRig = new THREE.Group();
+  wheelRig.name = 'wheel_rig';
+  root.add(wheelRig);
+  let wheelsRigged = false;
 
   // Kick off background preload of other models
   preloadAllCarGlbs();
@@ -495,6 +502,8 @@ export function buildAstonCar3D(
   let driveRollCurrent = 0;
   let driveBraking = 0;
   let driveRpmNorm = 0;
+  let driveHeaveTarget = 0;
+  let driveHeaveCurrent = 0;
   let driveVibPhase = 0;
   const valhallaRimMats: THREE.MeshStandardMaterial[] = [];
 
@@ -529,6 +538,7 @@ export function buildAstonCar3D(
         cabinResult.group.visible = false;
       }
     }
+    wheelRig.visible = glbContainer.visible;
   }
 
   syncInteriorExteriorVisibility();
@@ -842,25 +852,23 @@ export function buildAstonCar3D(
         const byZ = wheelSpinNodes
           .map((n) => ({ n, c: centreOf(n) }))
           .sort((a, b) => a.c.clone().applyMatrix4(toRoot).z - b.c.clone().applyMatrix4(toRoot).z);
-        const rootQ = new THREE.Quaternion();
-        root.getWorldQuaternion(rootQ);
+        // Wheels leave the sprung body (world transforms are kept by attach()). In the rig's frame
+        // the car's lateral X axis is every wheel's axle, so one spin rule fits all four GLBs.
+        for (const { n } of byZ) wheelRig.attach(n);
+        wheelRig.updateMatrixWorld(true);
         for (const { n, c } of byZ.slice(0, 2)) {
-          const parent = n.parent;
-          if (!parent) continue;
           const pivot = new THREE.Group();
           pivot.name = `${n.name}_steer`;
-          parent.add(pivot);
-          pivot.position.copy(parent.worldToLocal(c.clone()));
+          wheelRig.add(pivot);
+          pivot.position.copy(wheelRig.worldToLocal(c.clone()));
           pivot.updateMatrixWorld(true);
           pivot.attach(n);
-          // the car's up axis expressed in the pivot's parent frame
-          const parentQ = new THREE.Quaternion();
-          parent.getWorldQuaternion(parentQ);
-          const up = new THREE.Vector3(0, 1, 0).applyQuaternion(rootQ).applyQuaternion(parentQ.invert()).normalize();
-          steerPivots.push({ pivot, axis: up });
+          steerPivots.push({ pivot, axis: new THREE.Vector3(0, 1, 0) });
         }
         // keep the spin loop's front/rear radius split in step with the new order
         wheelSpinNodes.splice(0, 4, ...byZ.map((w) => w.n));
+        wheelsRigged = true;
+        wheelRig.visible = glbContainer.visible;
       }
     })
     .catch((err) => {
@@ -967,9 +975,10 @@ export function buildAstonCar3D(
       // + = right turn = clockwise seen from above = negative rotation about up
       for (const { pivot, axis } of steerPivots) pivot.quaternion.setFromAxisAngle(axis, -a);
     },
-    setDriveDynamics: (pitchRad: number, rollRad: number, braking01: number, rpmNorm: number) => {
+    setDriveDynamics: (pitchRad: number, rollRad: number, braking01: number, rpmNorm: number, heaveM = 0) => {
       drivePitchTarget = pitchRad;
       driveRollTarget = rollRad;
+      driveHeaveTarget = heaveM;
       driveBraking = Math.max(0, Math.min(1, braking01));
       driveRpmNorm = Math.max(0, Math.min(1, rpmNorm));
     },
@@ -977,14 +986,17 @@ export function buildAstonCar3D(
       const doorsMoving = updateDoorLeaves(doorLeaves, dt);
       xrayMat.uniforms.uTime.value += dt;
 
-      // Smooth suspension pitch (squat/dive) & cornering roll + subtle engine idle/rev tremor
-      drivePitchCurrent += (drivePitchTarget - drivePitchCurrent) * Math.min(1, dt * 8.0);
-      driveRollCurrent += (driveRollTarget - driveRollCurrent) * Math.min(1, dt * 7.5);
+      // Sprung body: the drive game runs the spring-damper dynamics, so only a light filter here
+      // (strong smoothing would flatten the suspension's natural overshoot); plus engine tremor.
+      const k = Math.min(1, dt * 30);
+      drivePitchCurrent += (drivePitchTarget - drivePitchCurrent) * k;
+      driveRollCurrent += (driveRollTarget - driveRollCurrent) * k;
+      driveHeaveCurrent += (driveHeaveTarget - driveHeaveCurrent) * k;
       driveVibPhase += dt * (28 + driveRpmNorm * 95);
       const vib = driveRpmNorm > 0.01 ? Math.sin(driveVibPhase) * 0.00055 * (0.4 + driveRpmNorm * 0.6) : 0;
       glbContainer.rotation.x = drivePitchCurrent;
       glbContainer.rotation.z = driveRollCurrent;
-      glbContainer.position.y = vib;
+      glbContainer.position.y = vib + driveHeaveCurrent;
       cabinResult.group.rotation.x = drivePitchCurrent * 0.85;
       cabinResult.group.rotation.z = driveRollCurrent * 0.85;
 
@@ -1002,7 +1014,10 @@ export function buildAstonCar3D(
         const angular = (aeroSpeed / 3.6) * dt;
         wheelSpinNodes.forEach((wNode, idx) => {
           const r = idx < 2 ? bp.wheelRadiusF : bp.wheelRadiusR;
-          if (car.id === 'valkyrie') {
+          if (wheelsRigged) {
+            // rig frame: axle = car X; forward rolling (nose −Z) is a negative turn about +X
+            wNode.rotation.x -= angular / r;
+          } else if (car.id === 'valkyrie') {
             // Valkyrie wheel bones use local Z/Y depending on FBX orientation; spin smoothly
             wNode.rotation.z += angular / r;
           } else {

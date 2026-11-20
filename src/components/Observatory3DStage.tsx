@@ -614,6 +614,9 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
 
       if (curMode === 'drive') {
         // ---- PROVING GROUND GAME ----
+        // The CFD streamlines are only toggled in the studio branch below; coming straight from the
+        // wind tunnel they would otherwise stay frozen around the car for the whole drive.
+        streakLines.visible = false;
         const game = driveGameRef.current;
         if (game && game.isActive && car3d) game.update(dt);
         else if (car3d) car3d.update(dt);

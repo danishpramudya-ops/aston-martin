@@ -159,10 +159,17 @@ export class DriveGame {
   private night = 0;
   private visible = true;
 
-  private camYaw = 0;
+  private camHeading = 0;
+  private camHeadingV = 0;
   private camDist = 6;
+  private camDistV = 0;
+  private camFov = 54;
   private camSnap = true;
   private shake = 0;
+  /** Sprung-body springs (rad, rad, m) and the cockpit head springs. */
+  private readonly susp = { pitch: 0, pitchV: 0, roll: 0, rollV: 0, heave: 0, heaveV: 0 };
+  private readonly head = { x: 0, xV: 0, z: 0, zV: 0, yaw: 0, yawV: 0 };
+  private bumpDist = 0;
   private clock = 0;
   private brakeTemp = 145;
   private peakKmh = 0;
@@ -533,6 +540,8 @@ export class DriveGame {
         this.impactCooldown = Math.max(0, this.impactCooldown - dt);
         if (this.events.impact > 2.5) {
           this.shake = Math.min(1, this.shake + this.events.impact * 0.06);
+          this.susp.rollV += Math.sign(st.loc.lateral || 1) * Math.min(0.5, this.events.impact * 0.03);
+          this.susp.heaveV += Math.min(0.25, this.events.impact * 0.012);
           if (this.audioOn && this.impactCooldown <= 0) {
             driveSfx.impact(this.events.impact);
             this.impactCooldown = 0.25;
@@ -562,13 +571,35 @@ export class DriveGame {
       else this.brakeTemp = Math.max(145, this.brakeTemp - dt * (28 + kmh * 0.16));
     }
 
-    // ---- car body ----
-    const stiffness = this.mode === 'TRACK' ? 0.65 : this.mode === 'GT' ? 1.18 : 0.88;
-    const pitch = THREE.MathUtils.clamp(st.longG * 0.022 * stiffness, -0.034, 0.026);
-    const roll = THREE.MathUtils.clamp(st.latG * 0.026 * stiffness, -0.045, 0.045);
+    // ---- car body: spring-damper suspension over planted wheels ----
+    // Roll / pitch follow the felt accelerations through under-damped springs, so the body leans
+    // into a corner, settles with a hint of overshoot, squats and dives – plus aero squat, road
+    // texture, kerb rumble and grass bumps on the heave.
+    const hyper = this.car.id === 'valkyrie' || this.car.id === 'valhalla';
+    const soft = this.mode === 'GT' ? 1.2 : this.mode === 'SPORT' ? 1 : this.mode === 'SPORT+' ? 0.85 : 0.7;
+    const rollTarget = frozen ? 0 : THREE.MathUtils.clamp(st.latG * (hyper ? 0.011 : 0.024) * soft, -0.07, 0.07);
+    const pitchTarget = frozen ? 0 : THREE.MathUtils.clamp(st.longG * (hyper ? 0.009 : 0.016) * soft, -0.05, 0.035);
+    this.bumpDist += frozen ? 0 : st.speed * dt;
+    const b = this.bumpDist;
+    let bump = 0;
+    if (st.surface === 'kerb') bump = Math.sin(b * 4.19) * 0.009 * Math.min(1, st.speed / 10);
+    else if (st.surface === 'grass') bump = (Math.sin(b * 3.1) * 0.5 + Math.sin(b * 7.7) * 0.3 + Math.sin(b * 13.3) * 0.2) * 0.017 * Math.min(1, st.speed / 8);
+    else bump = (Math.sin(b * 2.3) * 0.6 + Math.sin(b * 5.9) * 0.4) * 0.0011 * Math.min(1, st.speed / 40);
+    const aeroSquat = Math.min(1, (kmh / this.car.aero.downforceRefKmh) ** 2) * (hyper ? 0.024 : 0.008);
+    const heaveTarget = frozen ? 0 : bump - aeroSquat;
+    const wBody = Math.PI * 2 * (hyper ? 2.3 : 1.6);
+    const zeta = hyper ? 0.5 : 0.42;
+    const P = this.susp;
+    const hs = Math.min(dt, 1 / 30);
+    P.rollV += (wBody * wBody * (rollTarget - P.roll) - 2 * zeta * wBody * P.rollV) * hs;
+    P.roll += P.rollV * hs;
+    P.pitchV += (wBody * wBody * (pitchTarget - P.pitch) - 2 * zeta * wBody * P.pitchV) * hs;
+    P.pitch += P.pitchV * hs;
+    P.heaveV += (wBody * wBody * (heaveTarget - P.heave) - 2 * zeta * wBody * P.heaveV) * hs;
+    P.heave += P.heaveV * hs;
     car3d.setActiveAero(kmh);
     car3d.setBrakeThermal(THREE.MathUtils.clamp((this.brakeTemp - 260) / 360, 0, 2));
-    car3d.setDriveDynamics(pitch, roll, st.gear > 0 ? inp.brake : 0, st.rpm / spec.redlineRpm);
+    car3d.setDriveDynamics(P.pitch, P.roll, st.gear > 0 ? inp.brake : 0, st.rpm / spec.redlineRpm, P.heave);
     car3d.setSteer(st.steerAngle);
     car3d.update(dt);
 
@@ -674,23 +705,41 @@ export class DriveGame {
     const sy = (Math.sin(t * 53.7) + Math.sin(t * 29.3) * 0.5) * amp;
 
     if (this.cameraMode === 'chase') {
-      // The camera trails the direction of travel, so slides show the car's flank; it swings out a
-      // touch in fast direction changes and drops back under acceleration.
-      const slipFollow = st.speed > 4 && st.gear > 0 ? -st.slipAngle * 0.8 : 0;
-      const yawTarget = slipFollow + THREE.MathUtils.clamp(st.yawRate * 0.07, -0.12, 0.12);
-      const k = this.camSnap ? 1 : 1 - Math.exp(-dt * 4.5);
-      this.camYaw += (yawTarget - this.camYaw) * k;
-      const distTarget = 5.2 + bp.L * 0.22 + speedNorm * 1.5 + THREE.MathUtils.clamp(st.longG, -1.5, 1.5) * 0.32;
-      this.camDist += (distTarget - this.camDist) * (this.camSnap ? 1 : 1 - Math.exp(-dt * 3));
-      const height = 1.25 + bp.H * 0.62;
-      const cy = Math.cos(this.camYaw);
-      const syaw = Math.sin(this.camYaw);
-      cam.position.set(syaw * this.camDist + sx, height + sy, cy * this.camDist);
-      // Look a little ahead of the car and toward the direction of travel; the target sits low so
-      // the car rides in the upper half of the frame, clear of the instrument cluster.
-      this.lookV.set(syaw * -3.5, bp.H * 0.18, -6.5 * cy);
+      // Forza / GT-style chase cam: the camera is not bolted to the car. Its heading chases the
+      // car's heading (blended toward the direction of travel at speed) through a critically
+      // damped spring, so turning visibly rotates the car in the frame, slides show its flank, and
+      // nothing snaps. Distance and FOV ride their own springs (falls back under acceleration).
+      const wrapA = (x: number) => Math.atan2(Math.sin(x), Math.cos(x));
+      const velHeading = Math.atan2(-st.vx, -st.vz);
+      const follow = st.forwardSpeed > 2 ? THREE.MathUtils.clamp((st.speed - 2) / 14, 0, 1) * 0.6 : 0;
+      const targetHeading = st.heading + wrapA(velHeading - st.heading) * follow;
+      const distTarget = 5.2 + bp.L * 0.22 + speedNorm * 1.5 + THREE.MathUtils.clamp(st.longG, -1.5, 1.5) * 0.35;
+      const fovTarget = 52 + speedNorm * 15 + (st.boosting ? 4 : 0);
+      if (this.camSnap) {
+        this.camHeading = targetHeading;
+        this.camHeadingV = 0;
+        this.camDist = distTarget;
+        this.camDistV = 0;
+        this.camFov = fovTarget;
+      }
+      const hc = Math.min(dt, 1 / 30);
+      const wH = 5.2;
+      this.camHeadingV += (wH * wH * wrapA(targetHeading - this.camHeading) - 2 * wH * this.camHeadingV) * hc;
+      this.camHeading = wrapA(this.camHeading + this.camHeadingV * hc);
+      const wD = 3.2;
+      this.camDistV += (wD * wD * (distTarget - this.camDist) - 2 * wD * this.camDistV) * hc;
+      this.camDist += this.camDistV * hc;
+      this.camFov += (fovTarget - this.camFov) * Math.min(1, dt * 2.5);
+      // camera bearing around the car, in car-local space
+      const phi = THREE.MathUtils.clamp(wrapA(this.camHeading - st.heading), -1.1, 1.1);
+      const height = 1.25 + bp.H * 0.62 - speedNorm * 0.12;
+      const sp = Math.sin(phi);
+      const cp = Math.cos(phi);
+      cam.position.set(sp * this.camDist + sx, height + sy, cp * this.camDist);
+      // aim ahead along the camera's own bearing: the car stays framed while it rotates under it
+      this.lookV.set(-sp * 6.5, bp.H * 0.18, -cp * 6.5);
       cam.lookAt(this.lookV);
-      cam.fov = 52 + speedNorm * 15 + (st.boosting ? 4 : 0);
+      cam.fov = this.camFov;
       cam.near = 0.15;
       // Lens shift (not extra pitch): lifts the car into the upper-middle of the frame, clear of
       // the instrument cluster, with the horizon at ~38 % like a broadcast chase camera.
@@ -700,9 +749,28 @@ export class DriveGame {
       const ex = native ? native.pos[0] : bp.driverX;
       const ey = native ? native.pos[1] : bp.eyeY + 0.03;
       const ez = native ? native.pos[2] : bp.eyeZ + 0.05;
-      const head = THREE.MathUtils.clamp(-st.latG * 0.012, -0.03, 0.03);
-      cam.position.set(ex + head + sx * 0.3, ey + sy * 0.3 - THREE.MathUtils.clamp(st.longG, -2, 2) * 0.004, ez + THREE.MathUtils.clamp(st.longG, -2, 2) * 0.012);
-      this.lookV.set(ex + this.vin.steer * 0.9 + head * 8, ey - 0.16, ez - 20);
+      // Driver's head on springs: pushed outward in corners, back under power, forward under
+      // braking, and glancing into the turn like a real driver looks for the apex.
+      const H = this.head;
+      const hh = Math.min(dt, 1 / 30);
+      const wHd = 7;
+      const xT = frozen ? 0 : THREE.MathUtils.clamp(-st.latG * 0.018, -0.04, 0.04);
+      const zT = frozen ? 0 : THREE.MathUtils.clamp(st.longG * 0.014, -0.035, 0.03);
+      const yawT = frozen ? 0 : THREE.MathUtils.clamp(st.yawRate * 0.14 + this.vin.steer * 0.04, -0.16, 0.16);
+      if (this.camSnap) {
+        H.x = xT;
+        H.z = zT;
+        H.yaw = yawT;
+        H.xV = H.zV = H.yawV = 0;
+      }
+      H.xV += (wHd * wHd * (xT - H.x) - 2 * 0.7 * wHd * H.xV) * hh;
+      H.x += H.xV * hh;
+      H.zV += (wHd * wHd * (zT - H.z) - 2 * 0.7 * wHd * H.zV) * hh;
+      H.z += H.zV * hh;
+      H.yawV += (25 * (yawT - H.yaw) - 2 * 0.8 * 5 * H.yawV) * hh;
+      H.yaw += H.yawV * hh;
+      cam.position.set(ex + H.x + sx * 0.3, ey + sy * 0.3 + this.susp.heave * 0.6, ez + H.z);
+      this.lookV.set(ex + H.x - Math.sin(H.yaw) * 20, ey - 0.16, ez - Math.cos(H.yaw) * 20);
       cam.lookAt(this.lookV);
       cam.fov = 64 + speedNorm * 10;
       cam.near = 0.03;
