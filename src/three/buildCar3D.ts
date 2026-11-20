@@ -33,6 +33,8 @@ export interface Car3DInstance {
   setActiveAero: (speedKmh: number) => void;
   setBrakeThermal: (tempNorm: number) => void;
   setDriveDynamics: (pitchRad: number, rollRad: number, braking01: number, rpmNorm: number) => void;
+  /** Front-wheel steering angle for the drive game (rad, + = right). */
+  setSteer: (angleRad: number) => void;
   /** Resolves once the GLB coachwork is mounted, shaded and rigged (rejects on load failure). */
   ready: Promise<void>;
   /** Advances animation; returns true while any door leaf is still moving. */
@@ -414,6 +416,10 @@ export function buildAstonCar3D(
 
   let doorLeaves: DoorLeaf[] = [];
   const wheelSpinNodes: THREE.Object3D[] = [];
+  // Steering pivots wrap the two front wheel nodes: steer rotates the pivot about the car's
+  // vertical axis while the wheel keeps spinning about its own axle inside it.
+  const steerPivots: { pivot: THREE.Object3D; axis: THREE.Vector3 }[] = [];
+  let steerAngle = 0;
   const customClonedMats: THREE.Material[] = [];
   const customHeadlightMats: THREE.MeshStandardMaterial[] = [];
 
@@ -826,6 +832,36 @@ export function buildAstonCar3D(
         const wNode = findNodeByName(glbScene, wName);
         if (wNode) wheelSpinNodes.push(wNode);
       });
+
+      // Front wheels = the two most nose-ward (−Z) wheel nodes; node names alone don't say so for
+      // every model (Vanquish wheels are just numbered).
+      if (wheelSpinNodes.length === 4) {
+        root.updateMatrixWorld(true);
+        const toRoot = new THREE.Matrix4().copy(root.matrixWorld).invert();
+        const centreOf = (o: THREE.Object3D) => new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3());
+        const byZ = wheelSpinNodes
+          .map((n) => ({ n, c: centreOf(n) }))
+          .sort((a, b) => a.c.clone().applyMatrix4(toRoot).z - b.c.clone().applyMatrix4(toRoot).z);
+        const rootQ = new THREE.Quaternion();
+        root.getWorldQuaternion(rootQ);
+        for (const { n, c } of byZ.slice(0, 2)) {
+          const parent = n.parent;
+          if (!parent) continue;
+          const pivot = new THREE.Group();
+          pivot.name = `${n.name}_steer`;
+          parent.add(pivot);
+          pivot.position.copy(parent.worldToLocal(c.clone()));
+          pivot.updateMatrixWorld(true);
+          pivot.attach(n);
+          // the car's up axis expressed in the pivot's parent frame
+          const parentQ = new THREE.Quaternion();
+          parent.getWorldQuaternion(parentQ);
+          const up = new THREE.Vector3(0, 1, 0).applyQuaternion(rootQ).applyQuaternion(parentQ.invert()).normalize();
+          steerPivots.push({ pivot, axis: up });
+        }
+        // keep the spin loop's front/rear radius split in step with the new order
+        wheelSpinNodes.splice(0, 4, ...byZ.map((w) => w.n));
+      }
     })
     .catch((err) => {
       console.error(`Failed to load GLB for ${car.id}:`, err);
@@ -923,6 +959,13 @@ export function buildAstonCar3D(
     },
     setBrakeThermal: (tempNorm: number) => {
       brakeHeatTarget = Math.max(0, Math.min(2.2, tempNorm));
+    },
+    setSteer: (angleRad: number) => {
+      const a = Math.max(-0.55, Math.min(0.55, angleRad));
+      if (Math.abs(a - steerAngle) < 1e-4) return;
+      steerAngle = a;
+      // + = right turn = clockwise seen from above = negative rotation about up
+      for (const { pivot, axis } of steerPivots) pivot.quaternion.setFromAxisAngle(axis, -a);
     },
     setDriveDynamics: (pitchRad: number, rollRad: number, braking01: number, rpmNorm: number) => {
       drivePitchTarget = pitchRad;

@@ -30,15 +30,9 @@ import { engineAudio, type ExhaustValveMode } from '../audio/engineAudio';
 import { buildAstonCar3D, preloadCarModel, type Car3DInstance } from '../three/buildCar3D';
 import { getCameraPovsForCar, type CameraPovId, type CameraPovSpec } from '../three/cameraPovs';
 import { evaluateLowerCoachwork, type Car3DBlueprint } from '../three/carProfiles';
-import { buildDrivingTrack, type DrivingTrack } from '../three/drivingTrack';
 import { Studio } from '../three/studio';
-import {
-  DriveClusterOverlay,
-  DriveControlDeck,
-  type DriveCameraMode,
-  type DriveModeName,
-  type DriveTelemetrySnapshot,
-} from './DriveClusterHud';
+import { DriveGame, type DriveModeName } from '../game/driveGame';
+import { DriveClusterOverlay, DriveControlDeck, DriveRaceHud } from './DriveClusterHud';
 
 interface Observatory3DStageProps {
   car: AstonCar;
@@ -138,33 +132,17 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
   const [brakeStress, setBrakeStress] = useState(false);
   const [loadingCar, setLoadingCar] = useState(true);
 
-  // Proving Ground Interactive Driving Simulator state
-  const [driveCamera, setDriveCamera] = useState<DriveCameraMode>('chase');
-  const [driveMode, setDriveMode] = useState<DriveModeName>('SPORT+');
-  const [manualShift, setManualShift] = useState(false);
-  const [driveAudioOn, setDriveAudioOn] = useState(true);
-  const [driveTelemetry, setDriveTelemetry] = useState<DriveTelemetrySnapshot>({
-    speedKmh: 0,
-    rpm: 1100,
-    gear: 1,
-    throttle: 0,
-    brake: 0,
-    steer: 0,
-    latG: 0,
-    longG: 0,
-    downforceKg: 0,
-    brakeTempC: 145,
-    kersPct: 100,
-    kersActive: false,
-    zeroTo100Sec: null,
-    zeroTo200Sec: null,
-    peakSpeedKmh: 0,
-    launchArmed: false,
-  });
+  // Cockpit drive-mode rotary (studio switchgear); carried into the Proving Ground game.
+  const [rotaryMode, setRotaryMode] = useState<DriveModeName>('SPORT+');
+  // Proving Ground game (created with the studio; its HUD subscribes to the game's own store, so
+  // this stage no longer re-renders ~22×/s while driving)
+  const [driveGame, setDriveGame] = useState<DriveGame | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const studioRef = useRef<Studio | null>(null);
   const car3dRef = useRef<Car3DInstance | null>(null);
-  const trackRef = useRef<DrivingTrack | null>(null);
+  const driveGameRef = useRef<DriveGame | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const ringsRef = useRef<THREE.Object3D[]>([]);
   const povsRef = useRef<CameraPovSpec[]>([]);
   const activePovRef = useRef<CameraPovSpec | null>(null);
@@ -192,32 +170,6 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
     toSpec: null,
   });
 
-  // Live driving physics mutable state (updated at 60fps in rAF; UI synced throttled ~20Hz)
-  const driveInputRef = useRef({
-    throttle: false,
-    brake: false,
-    left: false,
-    right: false,
-    boost: false,
-  });
-  const driveSimRef = useRef({
-    speedMps: 0,
-    rpm: 1100,
-    gear: 1,
-    steer: 0,
-    laneX: 0,
-    brakeTempC: 145,
-    kersPct: 100,
-    launchArmed: false,
-    runStartTime: null as number | null,
-    zeroTo100Sec: null as number | null,
-    zeroTo200Sec: null as number | null,
-    peakSpeedKmh: 0,
-    shiftCooldown: 0,
-    lastUiSync: 0,
-    audioStarted: false,
-  });
-
   // Latest React state mirrored to refs for rAF & async swaps
   const carRef = useRef(car);
   const modeRef = useRef(mode);
@@ -233,10 +185,7 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
   const studioMoodRef = useRef(studioMood);
   const xrayRef = useRef(xrayMode);
   const showSwitchgearRef = useRef(showSwitchgearPins);
-  const driveCamRef = useRef(driveCamera);
-  const driveModeRef = useRef(driveMode);
-  const manualShiftRef = useRef(manualShift);
-  const driveAudioRef = useRef(driveAudioOn);
+  const rotaryModeRef = useRef(rotaryMode);
 
   carRef.current = car;
   paintRef.current = paint;
@@ -249,10 +198,7 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
   xrayRef.current = xrayMode;
   showSwitchgearRef.current = showSwitchgearPins;
   activePovIdRef.current = activePovId;
-  driveCamRef.current = driveCamera;
-  driveModeRef.current = driveMode;
-  manualShiftRef.current = manualShift;
-  driveAudioRef.current = driveAudioOn;
+  rotaryModeRef.current = rotaryMode;
 
   const brakeThermalFor = (aero: boolean, stress: boolean, kmh: number) =>
     aero && stress ? 0.5 + (kmh / 360) * 1.6 : 0;
@@ -269,47 +215,11 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
     return () => onRegisterSnapshot(null);
   }, [onRegisterSnapshot]);
 
-  // Reset selected pins & driving run when car changes
+  // Reset selected pins when the car changes (the drive game resets its own run on setCar)
   useEffect(() => {
     setSelectedXrayPart(null);
     setSelectedSwitch(null);
     setSwitchStatusMsg(null);
-    const phys = DRIVE_PHYSICS_PROFILES[car.id] || DRIVE_PHYSICS_PROFILES.valkyrie;
-    driveSimRef.current = {
-      speedMps: 0,
-      rpm: phys.idleRpm,
-      gear: 1,
-      steer: 0,
-      laneX: 0,
-      brakeTempC: 145,
-      kersPct: 100,
-      launchArmed: false,
-      runStartTime: null,
-      zeroTo100Sec: null,
-      zeroTo200Sec: null,
-      peakSpeedKmh: 0,
-      shiftCooldown: 0,
-      lastUiSync: 0,
-      audioStarted: false,
-    };
-    setDriveTelemetry({
-      speedKmh: 0,
-      rpm: phys.idleRpm,
-      gear: 1,
-      throttle: 0,
-      brake: 0,
-      steer: 0,
-      latG: 0,
-      longG: 0,
-      downforceKg: 0,
-      brakeTempC: 145,
-      kersPct: 100,
-      kersActive: false,
-      zeroTo100Sec: null,
-      zeroTo200Sec: null,
-      peakSpeedKmh: 0,
-      launchArmed: false,
-    });
   }, [car.id]);
 
   // Mode transitions (Studio <-> CFD Aero <-> Proving Ground Drive)
@@ -318,27 +228,26 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
     const isDrive = mode === 'drive';
     const isAero = mode === 'aero';
 
-    trackRef.current?.setVisible(isDrive);
-    studioRef.current?.setFloorVisible(!isDrive);
     ringsRef.current.forEach((r) => {
       r.visible = !isDrive;
     });
 
+    const game = driveGameRef.current;
     if (isDrive) {
       setDoorsOpen(false);
       setXrayMode(false);
       setAutoOrbit(false);
       setSelectedXrayPart(null);
       setSelectedSwitch(null);
+      flyStateRef.current.active = false;
       if (controlsRef.current) controlsRef.current.enabled = false;
-      car3dRef.current?.setInteriorMode(driveCamRef.current === 'cockpit');
+      game?.setMode(rotaryModeRef.current);
+      // Before the first car has streamed in, the vehicle swap effect starts the game instead.
+      if (game && car3dRef.current && !game.isActive) void game.enter(car3dRef.current, carRef.current);
     } else {
       if (controlsRef.current) controlsRef.current.enabled = true;
-      car3dRef.current?.setDriveDynamics(0, 0, 0, 0);
-      if (driveSimRef.current.audioStarted) {
-        engineAudio.stop();
-        driveSimRef.current.audioStarted = false;
-      }
+      if (game?.isActive) game.exit();
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
       if (isAero) {
         const cur = activePovRef.current;
         if (!cur || cur.zone === 'interior') {
@@ -359,12 +268,6 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
-
-  useEffect(() => {
-    if (modeRef.current === 'drive') {
-      car3dRef.current?.setInteriorMode(driveCamera === 'cockpit');
-    }
-  }, [driveCamera]);
 
   useEffect(() => {
     autoOrbitRef.current = autoOrbit;
@@ -474,8 +377,8 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
       }
     } else if (sw.actionType === 'driveMode') {
       const order: DriveModeName[] = ['GT', 'SPORT', 'SPORT+', 'TRACK'];
-      const next = order[(order.indexOf(driveMode) + 1) % order.length];
-      setDriveMode(next);
+      const next = order[(order.indexOf(rotaryMode) + 1) % order.length];
+      setRotaryMode(next);
       const ex: ExhaustValveMode = next === 'TRACK' || next === 'SPORT+' ? 'TRACK' : next === 'SPORT' ? 'SPORT' : 'QUIET';
       setExhaustMode(ex);
       engineAudio.setExhaustValve(ex);
@@ -514,118 +417,6 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
       setSwitchStatusMsg(`Matrix LED & Cabin Illumination Toggled`);
     }
   };
-
-  // Manual gear shift handler for Proving Ground drive mode
-  const handleManualShift = useCallback(
-    (dir: 'up' | 'down') => {
-      const sim = driveSimRef.current;
-      const phys = DRIVE_PHYSICS_PROFILES[carRef.current.id] || DRIVE_PHYSICS_PROFILES.valkyrie;
-      const maxGear = phys.gearRatios.length;
-      if (dir === 'up' && sim.gear < maxGear) {
-        sim.gear += 1;
-        sim.shiftCooldown = 0.22;
-        if (driveAudioRef.current) engineAudio.triggerGearShift('up', sim.rpm);
-      } else if (dir === 'down' && sim.gear > 1) {
-        sim.gear -= 1;
-        sim.shiftCooldown = 0.22;
-        if (driveAudioRef.current) engineAudio.triggerGearShift('down', sim.rpm);
-      }
-    },
-    []
-  );
-
-  const handleTriggerLaunch = useCallback(() => {
-    const sim = driveSimRef.current;
-    const phys = DRIVE_PHYSICS_PROFILES[carRef.current.id] || DRIVE_PHYSICS_PROFILES.valkyrie;
-    engineAudio.playSwitchClick(true);
-    sim.speedMps = 0;
-    sim.gear = 1;
-    sim.launchArmed = true;
-    sim.runStartTime = null;
-    sim.zeroTo100Sec = null;
-    sim.zeroTo200Sec = null;
-    if (driveAudioRef.current) {
-      engineAudio.start(carRef.current.topology, phys.redlineRpm * 0.45);
-      sim.audioStarted = true;
-    }
-  }, []);
-
-  const handleResetDriveRun = useCallback(() => {
-    const sim = driveSimRef.current;
-    const phys = DRIVE_PHYSICS_PROFILES[carRef.current.id] || DRIVE_PHYSICS_PROFILES.valkyrie;
-    engineAudio.playSwitchClick(false);
-    sim.speedMps = 0;
-    sim.rpm = phys.idleRpm;
-    sim.gear = 1;
-    sim.steer = 0;
-    sim.laneX = 0;
-    sim.brakeTempC = 145;
-    sim.kersPct = 100;
-    sim.launchArmed = false;
-    sim.runStartTime = null;
-    sim.zeroTo100Sec = null;
-    sim.zeroTo200Sec = null;
-    sim.peakSpeedKmh = 0;
-  }, []);
-
-  // Keyboard bindings when Proving Ground Drive mode is active
-  useEffect(() => {
-    if (mode !== 'drive') return;
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      const k = e.key.toLowerCase();
-      if (k === 'w' || e.key === 'ArrowUp') {
-        e.preventDefault();
-        driveInputRef.current.throttle = true;
-      } else if (k === 's' || e.key === 'ArrowDown') {
-        e.preventDefault();
-        driveInputRef.current.brake = true;
-      } else if (k === 'a' || e.key === 'ArrowLeft') {
-        e.preventDefault();
-        driveInputRef.current.left = true;
-      } else if (k === 'd' || e.key === 'ArrowRight') {
-        e.preventDefault();
-        driveInputRef.current.right = true;
-      } else if (e.key === ' ') {
-        e.preventDefault();
-        const phys = DRIVE_PHYSICS_PROFILES[carRef.current.id] || DRIVE_PHYSICS_PROFILES.valkyrie;
-        if (phys.hasHybridBoost) {
-          driveInputRef.current.boost = true;
-        } else {
-          handleTriggerLaunch();
-        }
-      } else if (k === 'e' || e.key === 'Shift') {
-        handleManualShift('up');
-      } else if (k === 'q' || e.key === 'Control') {
-        handleManualShift('down');
-      } else if (k === 'c') {
-        setDriveCamera((prev) => (prev === 'chase' ? 'cockpit' : prev === 'cockpit' ? 'bonnet' : 'chase'));
-      } else if (k === 'm') {
-        setDriveMode((prev) => {
-          const order: DriveModeName[] = ['GT', 'SPORT', 'SPORT+', 'TRACK'];
-          return order[(order.indexOf(prev) + 1) % order.length];
-        });
-      }
-    };
-
-    const onKeyUp = (e: KeyboardEvent) => {
-      const k = e.key.toLowerCase();
-      if (k === 'w' || e.key === 'ArrowUp') driveInputRef.current.throttle = false;
-      else if (k === 's' || e.key === 'ArrowDown') driveInputRef.current.brake = false;
-      else if (k === 'a' || e.key === 'ArrowLeft') driveInputRef.current.left = false;
-      else if (k === 'd' || e.key === 'ArrowRight') driveInputRef.current.right = false;
-      else if (e.key === ' ') driveInputRef.current.boost = false;
-    };
-
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-      driveInputRef.current = { throttle: false, brake: false, left: false, right: false, boost: false };
-    };
-  }, [mode, handleManualShift, handleTriggerLaunch]);
 
   // Respond cleanly when external components request a specific POV
   useEffect(() => {
@@ -670,7 +461,22 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
   useEffect(() => {
     car3dRef.current?.setLightsMode(nightLights);
     studioRef.current?.setNight(nightLights);
+    driveGameRef.current?.setNight(nightLights);
   }, [nightLights]);
+
+  // Fullscreen applies to the viewport itself (HUD included); F key or the HUD button.
+  const toggleFullscreen = useCallback(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    else void el.requestFullscreen?.().catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(viewportRef.current) && document.fullscreenElement === viewportRef.current);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
 
   useEffect(() => {
     studioRef.current?.setMood(studioMood);
@@ -725,11 +531,6 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
     scene.add(innerTick);
     ringsRef.current = [brassRing, innerTick];
 
-    // Proving Ground twilight asphalt circuit (shown only in Drive mode)
-    const track = buildDrivingTrack();
-    trackRef.current = track;
-    scene.add(track.group);
-
     const startPov = povsRef.current[0];
     const camera = new THREE.PerspectiveCamera(35, el.clientWidth / Math.max(1, el.clientHeight), 0.04, 160);
     camera.position.set(-4.6, 1.5, -4.7);
@@ -770,10 +571,24 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
     streakLines.visible = false;
     streakLines.frustumCulled = false;
     scene.add(streakLines);
-    studio.props.push(brassRing, innerTick, streakLines, track.group);
+    studio.props.push(brassRing, innerTick, streakLines);
+
+    // Proving Ground game: builds its circuit lazily on the first drive.
+    const game = new DriveGame(studio, camera);
+    game.onFullscreenRequest = () => toggleFullscreen();
+    driveGameRef.current = game;
+    setDriveGame(game);
+    if (import.meta.env.DEV) (window as unknown as { __driveGame?: DriveGame }).__driveGame = game;
 
     let onScreen = true;
-    const io = new IntersectionObserver(([entry]) => (onScreen = entry.isIntersecting), { threshold: 0.01 });
+    const io = new IntersectionObserver(
+      ([entry]) => {
+        onScreen = entry.isIntersecting;
+        // Only hijack WASD / arrows / Space while most of the stage is actually on screen.
+        game.setVisible(entry.intersectionRatio >= 0.35);
+      },
+      { threshold: [0, 0.01, 0.35, 0.6] }
+    );
     io.observe(el);
 
     const resize = () => {
@@ -797,200 +612,11 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
       const car3d = car3dRef.current;
       const curMode = modeRef.current;
 
-      if (curMode === 'drive' && car3d) {
-        // ---- REAL-TIME PROVING GROUND DRIVING PHYSICS ----
-        const activeCarObj = carRef.current;
-        const bp = car3d.blueprint;
-        const phys = DRIVE_PHYSICS_PROFILES[activeCarObj.id] || DRIVE_PHYSICS_PROFILES.valkyrie;
-        const inp = driveInputRef.current;
-        const sim = driveSimRef.current;
-
-        const throttle = inp.throttle ? 1 : 0;
-        const brake = inp.brake ? 1 : 0;
-        const steerTarget = (inp.right ? 1 : 0) - (inp.left ? 1 : 0);
-        sim.steer += (steerTarget - sim.steer) * Math.min(1, dt * 6.5);
-
-        const kersActive = phys.hasHybridBoost && inp.boost && sim.kersPct > 2 && throttle > 0.1;
-        if (kersActive) {
-          sim.kersPct = Math.max(0, sim.kersPct - dt * 22);
-        } else if (brake > 0.1 && sim.speedMps > 4) {
-          sim.kersPct = Math.min(100, sim.kersPct + dt * 28); // Regenerative braking recovery
-        } else {
-          sim.kersPct = Math.min(100, sim.kersPct + dt * 6);
-        }
-
-        // Start audio automatically on first throttle press if driveAudioOn
-        if ((throttle > 0.1 || sim.launchArmed) && driveAudioRef.current && !sim.audioStarted) {
-          engineAudio.triggerColdStart(activeCarObj.topology, phys.idleRpm);
-          sim.audioStarted = true;
-        }
-
-        const modeMultiplier =
-          driveModeRef.current === 'TRACK'
-            ? 1.06
-            : driveModeRef.current === 'SPORT+'
-              ? 1.02
-              : driveModeRef.current === 'SPORT'
-                ? 0.94
-                : 0.84;
-
-        // Power-to-weight longitudinal acceleration calibrated to real Aston Martin 0-100 & Vmax
-        const vmaxMps = activeCarObj.specs.topSpeedKmh / 3.6;
-        const p2w = (activeCarObj.specs.powerPS * (kersActive ? 1.15 : 1.0)) / Math.max(1000, activeCarObj.specs.weightKg);
-        const gearFactor = 0.55 + (phys.gearRatios[sim.gear - 1] || 1) * 0.22;
-        const maxAccel = Math.min(13.8, p2w * 15.2 * modeMultiplier * Math.min(1.35, gearFactor));
-        const aeroDragAccel = 0.00058 * activeCarObj.aero.dragCd * sim.speedMps * sim.speedMps;
-        const rollResist = sim.speedMps > 0.1 ? 0.32 : 0;
-        const brakeAccel = brake * phys.brakeDecelG * 9.81;
-
-        let netAccel = 0;
-        if (sim.launchArmed && throttle < 0.1) {
-          // Hold launch RPM at 45% redline until throttle is pressed
-          sim.rpm += (phys.redlineRpm * 0.48 - sim.rpm) * Math.min(1, dt * 10);
-          sim.speedMps = 0;
-        } else {
-          if (sim.launchArmed && throttle > 0.1) {
-            sim.launchArmed = false;
-            sim.runStartTime = now;
-            sim.zeroTo100Sec = null;
-            sim.zeroTo200Sec = null;
-          }
-          if (throttle > 0.1 && sim.speedMps < 0.8 && sim.runStartTime === null) {
-            sim.runStartTime = now;
-            sim.zeroTo100Sec = null;
-            sim.zeroTo200Sec = null;
-          }
-
-          const speedHeadroom = Math.max(0, 1 - Math.pow(sim.speedMps / vmaxMps, 2.4));
-          netAccel = throttle * maxAccel * speedHeadroom - brakeAccel - aeroDragAccel - rollResist;
-          sim.speedMps = Math.max(0, Math.min(vmaxMps, sim.speedMps + netAccel * dt));
-        }
-
-        const speedKmhNow = sim.speedMps * 3.6;
-        if (speedKmhNow > sim.peakSpeedKmh) sim.peakSpeedKmh = speedKmhNow;
-
-        // 0-100 & 0-200 stopwatch telemetry
-        if (sim.runStartTime !== null) {
-          if (sim.zeroTo100Sec === null && speedKmhNow >= 100) {
-            sim.zeroTo100Sec = (now - sim.runStartTime) / 1000;
-          }
-          if (sim.zeroTo200Sec === null && speedKmhNow >= 200) {
-            sim.zeroTo200Sec = (now - sim.runStartTime) / 1000;
-          }
-          if (speedKmhNow < 1 && throttle < 0.05) {
-            sim.runStartTime = null;
-          }
-        }
-
-        // Gear & RPM calculation
-        sim.shiftCooldown = Math.max(0, sim.shiftCooldown - dt);
-        const gearRatio = phys.gearRatios[sim.gear - 1] || 1;
-        const wheelRpm = (sim.speedMps / (2 * Math.PI * phys.tireRadiusM)) * 60;
-        const coupledRpm = wheelRpm * gearRatio * phys.finalDrive;
-        const targetRpm = Math.max(
-          phys.idleRpm + throttle * 1150,
-          Math.min(phys.redlineRpm, coupledRpm)
-        );
-        sim.rpm += (targetRpm - sim.rpm) * Math.min(1, dt * 12);
-
-        // Automatic DCT/Ricardo shifts when not in Manual mode
-        if (!manualShiftRef.current && sim.shiftCooldown <= 0) {
-          if (sim.rpm >= phys.shiftUpRpm && sim.gear < phys.gearRatios.length && throttle > 0.1) {
-            sim.gear += 1;
-            sim.shiftCooldown = 0.28;
-            if (driveAudioRef.current && sim.audioStarted) {
-              engineAudio.triggerGearShift('up', sim.rpm);
-            }
-          } else if (sim.rpm < phys.redlineRpm * 0.34 && sim.gear > 1 && sim.speedMps > 2) {
-            sim.gear -= 1;
-            sim.shiftCooldown = 0.28;
-            if (driveAudioRef.current && sim.audioStarted) {
-              engineAudio.triggerGearShift('down', sim.rpm);
-            }
-          }
-        }
-
-        // Lateral lane position & cornering G-force
-        const lateralVel = sim.steer * Math.min(4.8, sim.speedMps * 0.14);
-        sim.laneX = THREE.MathUtils.clamp(sim.laneX + lateralVel * dt, -3.3, 3.3);
-        const latG = sim.steer * Math.min(phys.maxLateralG, (sim.speedMps / 42) * phys.maxLateralG * 0.65);
-        const longG = netAccel / 9.81;
-
-        // Brake core thermal model (glows orange-red under repeated hard stops!)
-        if (brake > 0.1 && speedKmhNow > 25) {
-          sim.brakeTempC = Math.min(860, sim.brakeTempC + dt * (115 + speedKmhNow * 0.95));
-        } else {
-          const cooling = 28 + speedKmhNow * 0.16;
-          sim.brakeTempC = Math.max(145, sim.brakeTempC - dt * cooling);
-        }
-
-        // Push live telemetry to 3D car, track, and Web Audio synthesizer
-        const stiffness = driveModeRef.current === 'TRACK' ? 0.65 : driveModeRef.current === 'GT' ? 1.18 : 0.88;
-        const pitchRad = THREE.MathUtils.clamp(longG * 0.022 * stiffness, -0.032, 0.026);
-        const rollRad = THREE.MathUtils.clamp(latG * 0.028 * stiffness, -0.042, 0.042);
-        const brakeGlowNorm = THREE.MathUtils.clamp((sim.brakeTempC - 260) / 360, 0, 2.0);
-
-        car3d.setActiveAero(speedKmhNow);
-        car3d.setBrakeThermal(brakeGlowNorm);
-        car3d.setDriveDynamics(pitchRad, rollRad, brake, sim.rpm / phys.redlineRpm);
-        car3d.update(dt);
-
-        track.update(dt, speedKmhNow, sim.steer, sim.laneX, nightLightsRef.current);
-
-        if (driveAudioRef.current && sim.audioStarted) {
-          engineAudio.setDriveState(sim.rpm, Math.max(0.12, throttle), speedKmhNow, kersActive);
-        }
-
-        // Dynamic Drive Camera (Chase / Cockpit / Bonnet) with speed FOV warp & subtle corner lean
-        const speedNorm = Math.min(1, speedKmhNow / activeCarObj.specs.topSpeedKmh);
-        const camMode = driveCamRef.current;
-        if (camMode === 'cockpit') {
-          const headShake = Math.sin(now * 0.045) * 0.002 * speedNorm;
-          camera.position.set(
-            bp.driverX + sim.steer * 0.035,
-            bp.eyeY + 0.05 + headShake - pitchRad * 0.22,
-            bp.eyeZ - 0.14 + longG * 0.015
-          );
-          camera.lookAt(bp.driverX + sim.steer * 0.95, bp.eyeY - 0.12, -22);
-          camera.fov = 62 + speedNorm * 11;
-        } else if (camMode === 'bonnet') {
-          camera.position.set(sim.steer * 0.05, bp.windscreenBottomY + 0.14, bp.windscreenBottomZ - 0.12);
-          camera.lookAt(sim.steer * 1.4, bp.windscreenBottomY - 0.05, -24);
-          camera.fov = 56 + speedNorm * 14;
-        } else {
-          // Dynamic Trailing Chase 3D Cam framed cleanly above the center radial tachometer
-          const chaseDist = 5.45 + speedNorm * 0.85 + (longG > 0 ? longG * 0.2 : 0);
-          const targetCamX = sim.steer * 1.15;
-          const targetCamY = 1.88 + (bp.H - 1.15) * 0.45 - speedNorm * 0.1;
-          camera.position.lerp(new THREE.Vector3(targetCamX, targetCamY, chaseDist), Math.min(1, dt * 6));
-          camera.lookAt(sim.steer * 0.65, bp.H * 0.34, -8.5);
-          camera.fov = 43 + speedNorm * 14;
-        }
-        camera.updateProjectionMatrix();
-
-        // Sync telemetry HUD at ~22 Hz to keep React ultra-smooth
-        if (now - sim.lastUiSync > 45) {
-          sim.lastUiSync = now;
-          const sf = Math.min(1, Math.pow(speedKmhNow / activeCarObj.aero.downforceRefKmh, 2));
-          setDriveTelemetry({
-            speedKmh: speedKmhNow,
-            rpm: sim.rpm,
-            gear: sim.gear,
-            throttle,
-            brake,
-            steer: sim.steer,
-            latG,
-            longG,
-            downforceKg: Math.round(activeCarObj.aero.maxDownforceKg * sf),
-            brakeTempC: Math.round(sim.brakeTempC),
-            kersPct: sim.kersPct,
-            kersActive,
-            zeroTo100Sec: sim.zeroTo100Sec,
-            zeroTo200Sec: sim.zeroTo200Sec,
-            peakSpeedKmh: sim.peakSpeedKmh,
-            launchArmed: sim.launchArmed,
-          });
-        }
+      if (curMode === 'drive') {
+        // ---- PROVING GROUND GAME ----
+        const game = driveGameRef.current;
+        if (game && game.isActive && car3d) game.update(dt);
+        else if (car3d) car3d.update(dt);
       } else {
         // ---- STUDIO / POV / CFD AERO LOOP ----
         const fly = flyStateRef.current;
@@ -1112,10 +738,11 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
       ro.disconnect();
       controls.removeEventListener('start', onControlStart);
       controls.dispose();
+      game.dispose();
+      driveGameRef.current = null;
+      setDriveGame(null);
       car3dRef.current?.dispose();
       car3dRef.current = null;
-      track.dispose();
-      trackRef.current = null;
       brassRingGeo.dispose();
       brassRingMat.dispose();
       innerTickGeo.dispose();
@@ -1185,9 +812,7 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
         povsRef.current = povs;
         const pov = povs.find((p) => p.id === activePovIdRef.current) || povs[0];
         activePovRef.current = pov;
-        incoming.setInteriorMode(
-          modeRef.current === 'drive' ? driveCamRef.current === 'cockpit' : pov.zone === 'interior'
-        );
+        incoming.setInteriorMode(modeRef.current === 'drive' ? false : pov.zone === 'interior');
 
         flyStateRef.current.active = false;
         const camera = cameraRef.current;
@@ -1210,9 +835,17 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
             if (cancelled) return;
-            if (modeRef.current !== 'drive') flyTo(pov, 0.62);
             setLoadingCar(false);
-            studio.setFade(0, 1.25);
+            if (modeRef.current === 'drive') {
+              // The game owns the reveal while on the circuit (it fades in after its own warm-up).
+              const game = driveGameRef.current;
+              if (game?.isActive) game.setCar(incoming, carRef.current);
+              else if (game) void game.enter(incoming, carRef.current);
+              if (!game?.isLoading) studio.setFade(0, 1.25);
+            } else {
+              flyTo(pov, 0.62);
+              studio.setFade(0, 1.25);
+            }
           })
         );
       });
@@ -1288,7 +921,7 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
 
   return (
     <>
-      <div className={`studio-viewport ${mode === 'drive' ? 'drive-viewport' : ''}`}>
+      <div ref={viewportRef} className={`studio-viewport ${mode === 'drive' ? 'drive-viewport' : ''} ${isFullscreen ? 'is-fullscreen' : ''}`}>
         <div
           ref={mountRef}
           style={{ width: '100%', height: '100%', cursor: mode === 'drive' ? 'crosshair' : 'grab' }}
@@ -1545,55 +1178,18 @@ export const Observatory3DStage: React.FC<Observatory3DStageProps> = ({
           </div>
         )}
 
-        {/* Proving Ground Driving Telemetry Instrument Cluster Overlay */}
+        {/* Proving Ground: race HUD + instrument cluster (both subscribe to the game's store) */}
         {mode === 'drive' && (
-          <DriveClusterOverlay
-            car={car}
-            physics={activePhysics}
-            telemetry={driveTelemetry}
-            driveMode={driveMode}
-            manualShift={manualShift}
-          />
+          <>
+            <DriveRaceHud game={driveGame} car={car} isFullscreen={isFullscreen} onToggleFullscreen={toggleFullscreen} />
+            <DriveClusterOverlay game={driveGame} car={car} physics={activePhysics} />
+          </>
         )}
       </div>
 
       {/* Bottom Dock: 8 POVs OR CFD Speed Slider OR Proving Ground Interactive Driver Deck */}
       {mode === 'drive' ? (
-        <DriveControlDeck
-          car={car}
-          physics={activePhysics}
-          telemetry={driveTelemetry}
-          driveCamera={driveCamera}
-          driveMode={driveMode}
-          manualShift={manualShift}
-          audioOn={driveAudioOn}
-          onCameraChange={setDriveCamera}
-          onModeChange={(m) => {
-            engineAudio.playSwitchClick(false);
-            setDriveMode(m);
-            engineAudio.setExhaustValve(m === 'TRACK' || m === 'SPORT+' ? 'TRACK' : m === 'SPORT' ? 'SPORT' : 'QUIET');
-          }}
-          onToggleManual={() => {
-            engineAudio.playSwitchClick(false);
-            setManualShift((v) => !v);
-          }}
-          onToggleAudio={() => {
-            setDriveAudioOn((v) => {
-              const next = !v;
-              if (!next) {
-                engineAudio.stop();
-                driveSimRef.current.audioStarted = false;
-              }
-              return next;
-            });
-          }}
-          onShift={handleManualShift}
-          onTriggerLaunch={handleTriggerLaunch}
-          onResetRun={handleResetDriveRun}
-          onControlInput={(control, active) => {
-            driveInputRef.current[control] = active;
-          }}
-        />
+        <DriveControlDeck game={driveGame} car={car} physics={activePhysics} />
       ) : mode === 'studio' ? (
         <div className="pov-dock-bar">
           <div className="pov-status-readout">

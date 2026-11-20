@@ -27,6 +27,8 @@ class AstonEngineSynthesizer {
   private currentRpm = 1100;
   private currentLoad = 0.25;
   private currentSpeedKmh = 0;
+  /** Bumped by stop(): a cold start still cranking when the engine is switched off must not fire. */
+  private startToken = 0;
 
   private ensureContext() {
     if (!this.ctx) {
@@ -273,7 +275,9 @@ class AstonEngineSynthesizer {
     crankOsc.start(now);
     crankOsc.stop(now + 0.4);
 
+    const token = this.startToken;
     setTimeout(() => {
+      if (token !== this.startToken) return;
       this.start(topology, idleRpm);
       this.triggerBlip(Math.min(4800, idleRpm * 3.1), idleRpm);
     }, 240);
@@ -356,6 +360,7 @@ class AstonEngineSynthesizer {
   }
 
   public stop() {
+    this.startToken++;
     if (!this.ctx || !this.masterGain || !this.isPlaying) return;
     const now = this.ctx.currentTime;
     this.masterGain.gain.setTargetAtTime(0.0001, now, 0.08);
@@ -393,6 +398,12 @@ class AstonEngineSynthesizer {
 
   public get active() {
     return this.isPlaying;
+  }
+
+  /** Shared AudioContext (created on first use) for the drive-mode sound effects. */
+  public get context(): AudioContext | null {
+    this.ensureContext();
+    return this.ctx;
   }
 }
 

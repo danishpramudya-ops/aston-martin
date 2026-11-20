@@ -180,6 +180,68 @@ export function createStudioEnvironment(renderer: THREE.WebGLRenderer, size = 51
   return rt.texture;
 }
 
+/**
+ * Dusk sky for the Proving Ground: what the coachwork reflects once the car is out on the circuit.
+ * Rendered at the studio environment's size so every car material keeps the same program variant
+ * (the PMREM height is part of the cache key) and swapping skies never triggers a recompile.
+ */
+export function createDriveEnvironment(renderer: THREE.WebGLRenderer, size: number, sunDir: THREE.Vector3): THREE.Texture {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const env = new THREE.Scene();
+  const sky = new THREE.Mesh(
+    new THREE.SphereGeometry(40, 64, 32),
+    new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      uniforms: { uSun: { value: sunDir.clone().normalize() } },
+      vertexShader: /* glsl */ `
+        varying vec3 vDir;
+        void main() {
+          vDir = normalize(position);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform vec3 uSun;
+        varying vec3 vDir;
+        void main() {
+          vec3 d = normalize(vDir);
+          float h = d.y;
+          float sunAmt = max(dot(d, uSun), 0.0);
+          vec3 zenith = vec3(0.07, 0.13, 0.27);
+          vec3 horizon = vec3(0.7, 0.47, 0.33);
+          vec3 c = mix(horizon, zenith, pow(smoothstep(-0.02, 0.6, h), 0.55));
+          c += vec3(1.0, 0.5, 0.2) * pow(sunAmt, 5.0) * 0.9 * (1.0 - smoothstep(0.0, 0.4, h));
+          c += vec3(6.0, 4.6, 3.2) * smoothstep(0.995, 0.999, sunAmt);
+          // dark green-grey ground with a bright horizon line (reads as the rocker-panel reflection)
+          vec3 ground = mix(vec3(0.05, 0.06, 0.045), vec3(0.22, 0.18, 0.15), smoothstep(-0.35, 0.0, h));
+          c = h < 0.0 ? ground : c;
+          gl_FragColor = vec4(c, 1.0);
+        }
+      `,
+    })
+  );
+  env.add(sky);
+  // Trackside gantry / floodlight strips give the paint something crisp to catch at speed.
+  [-1, 1].forEach((s) => {
+    const strip = softbox(16, 0.4, 2.2, '#ffe9cc', [0.05, 0.35]);
+    strip.position.set(s * 9, 6.5, 0);
+    strip.lookAt(0, 0.6, 0);
+    strip.rotateZ(Math.PI / 2);
+    env.add(strip);
+  });
+  const rt = pmrem.fromScene(env, 0.02, 0.1, 100, { size });
+  pmrem.dispose();
+  env.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh) {
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    }
+  });
+  return rt.texture;
+}
+
 /* ------------------------------------------------------------------------------------------------
  * Showroom floor: blurred mirror reflection + baked contact shadow + light pools
  * ---------------------------------------------------------------------------------------------- */
@@ -501,6 +563,10 @@ export class Studio {
   private fadeSpeed = 1.6;
   private frameTimes: number[] = [];
   private disposed = false;
+  private driveMode = false;
+  private driveEnv: THREE.Texture | null = null;
+  private moodKey = new THREE.Color('#fff8ef');
+  private moodKicker = new THREE.Color('#dfe9ff');
 
   constructor(container: HTMLElement, options: StudioOptions = {}) {
     this.quality = options.quality ?? detectStudioQuality();
@@ -661,22 +727,76 @@ export class Studio {
   /** Shifts directional key/kicker light colour temperatures and floor base tone per studio mood. */
   setMood(mood: 'gaydon' | 'dusk' | 'night' | 'champagne') {
     if (mood === 'dusk') {
-      this.keyLight.color.set('#ffc896');
-      this.kickerLight.color.set('#8eb8ff');
+      this.moodKey.set('#ffc896');
+      this.moodKicker.set('#8eb8ff');
       this.floorUniforms.uBase.value.set('#14110f');
     } else if (mood === 'night') {
-      this.keyLight.color.set('#cde0ff');
-      this.kickerLight.color.set('#5a86cc');
+      this.moodKey.set('#cde0ff');
+      this.moodKicker.set('#5a86cc');
       this.floorUniforms.uBase.value.set('#080b10');
     } else if (mood === 'champagne') {
-      this.keyLight.color.set('#ffecc8');
-      this.kickerLight.color.set('#d8b67b');
+      this.moodKey.set('#ffecc8');
+      this.moodKicker.set('#d8b67b');
       this.floorUniforms.uBase.value.set('#14120c');
     } else {
-      this.keyLight.color.set('#fff8ef');
-      this.kickerLight.color.set('#dfe9ff');
+      this.moodKey.set('#fff8ef');
+      this.moodKicker.set('#dfe9ff');
       this.floorUniforms.uBase.value.set('#0e1210');
     }
+    if (!this.driveMode) {
+      this.keyLight.color.copy(this.moodKey);
+      this.kickerLight.color.copy(this.moodKicker);
+    }
+  }
+
+  /** Contact shadow baked under the car (car-local XZ), for ground shaders outside the studio. */
+  get contactShadowTexture(): THREE.Texture {
+    return this.contact.target.texture;
+  }
+
+  get contactShadowRect(): THREE.Vector4 {
+    return this.contact.rect;
+  }
+
+  /**
+   * Proving Ground mode: dusk sky reflections instead of softboxes, no showroom floor or backdrop
+   * (the circuit draws its own sky), warm low sun as the key light. Restores the studio on exit.
+   */
+  setDriveMode(on: boolean, sunDirTrack?: THREE.Vector3) {
+    if (on === this.driveMode) return;
+    this.driveMode = on;
+    if (on) {
+      if (!this.driveEnv) {
+        this.driveEnv = createDriveEnvironment(this.renderer, this.quality.envSize, sunDirTrack ?? new THREE.Vector3(-0.6, 0.3, 0.7));
+      }
+      this.scene.environment = this.driveEnv;
+      this.scene.background = null;
+      this.floor.visible = false;
+      this.keyLight.color.set('#ffd6a8');
+      this.kickerLight.color.set('#93aee8');
+    } else {
+      this.scene.environment = this.envTexture;
+      this.scene.environmentRotation.set(0, 0, 0);
+      this.scene.background = this.backdrop;
+      this.floor.visible = true;
+      this.keyLight.color.copy(this.moodKey);
+      this.kickerLight.color.copy(this.moodKicker);
+      this.keyLight.position.set(-3.5, 7, -2.5);
+      this.kickerLight.position.set(4.5, 2.5, 4.5);
+    }
+    this.invalidateShadow(2);
+  }
+
+  /**
+   * Floating-origin bookkeeping: the circuit turns around the car, so the sky reflections and the
+   * sun (key light) must turn with it. `sunDirScene` is the sun direction already in scene space.
+   */
+  setWorldYaw(heading: number, sunDirScene: THREE.Vector3) {
+    if (!this.driveMode) return;
+    // three negates environmentRotation before building envMapRotation → R_y(+ψ) maps scene → track
+    this.scene.environmentRotation.set(0, -heading, 0);
+    this.keyLight.position.copy(sunDirScene).multiplyScalar(10);
+    this.kickerLight.position.set(-sunDirScene.x * 8, 4, -sunDirScene.z * 8);
   }
 
   /** Synchronously renders one frame and captures a crisp JPEG snapshot for the Q Dossier. */
@@ -710,23 +830,46 @@ export class Studio {
     object: THREE.Object3D,
     camera: THREE.Camera,
     outgoing: THREE.Object3D | null = null,
-    _timeoutMs = 8000
+    timeoutMs = 8000
   ): Promise<void> {
     if (this.disposed) return Promise.resolve();
     const renderer = this.renderer;
     const previousTarget = renderer.getRenderTarget();
     const outgoingVisible = outgoing?.visible ?? false;
+    let pending: Set<THREE.Material>;
     try {
+      // Coachwork only ever draws into off-screen HDR targets (composer, mirror), which select linear
+      // output and no tone mapping; programs compiled against the canvas would never be reused.
       renderer.setRenderTarget(this.composer.readBuffer);
       if (outgoing) outgoing.visible = false;
-      renderer.compile(object, camera, this.scene);
+      pending = renderer.compile(object, camera, this.scene) as Set<THREE.Material>;
     } catch {
-      // Context loss or mid-dispose during model swap — safely ignore
+      return Promise.resolve();
     } finally {
       if (outgoing) outgoing.visible = outgoingVisible;
       if (!this.disposed) renderer.setRenderTarget(previousTarget);
     }
-    return Promise.resolve();
+    // Same wait as renderer.compileAsync(), but guarded: three's own poll calls
+    // program.isReady() unchecked and throws once the renderer is disposed mid-swap (React
+    // StrictMode remounts, fast car switching) – which is why a synchronous compile had replaced it,
+    // bringing back the 0.4–0.5 s link stalls on first reveal.
+    return new Promise<void>((resolve) => {
+      const deadline = performance.now() + timeoutMs;
+      const check = () => {
+        if (this.disposed || performance.now() > deadline) return resolve();
+        try {
+          for (const m of pending) {
+            const program = (renderer.properties.get(m) as { currentProgram?: { isReady: () => boolean } }).currentProgram;
+            if (!program || program.isReady()) pending.delete(m);
+          }
+        } catch {
+          return resolve();
+        }
+        if (pending.size === 0) resolve();
+        else window.setTimeout(check, 12);
+      };
+      check();
+    });
   }
 
   setSize(width: number, height: number) {
@@ -772,9 +915,15 @@ export class Studio {
 
     this.night += (this.nightTarget - this.night) * Math.min(1, dt * 3.2);
     this.floorUniforms.uNight.value = this.night;
-    this.scene.environmentIntensity = THREE.MathUtils.lerp(1.0, 0.4, this.night);
-    this.keyLight.intensity = THREE.MathUtils.lerp(1.1, 0.25, this.night);
-    this.kickerLight.intensity = THREE.MathUtils.lerp(0.45, 0.12, this.night);
+    if (this.driveMode) {
+      this.scene.environmentIntensity = THREE.MathUtils.lerp(1.0, 0.28, this.night);
+      this.keyLight.intensity = THREE.MathUtils.lerp(2.2, 0.12, this.night);
+      this.kickerLight.intensity = THREE.MathUtils.lerp(0.4, 0.08, this.night);
+    } else {
+      this.scene.environmentIntensity = THREE.MathUtils.lerp(1.0, 0.4, this.night);
+      this.keyLight.intensity = THREE.MathUtils.lerp(1.1, 0.25, this.night);
+      this.kickerLight.intensity = THREE.MathUtils.lerp(0.45, 0.12, this.night);
+    }
     if (this.bloom) {
       this.bloom.strength = this.bloomStrength * THREE.MathUtils.lerp(1, 1.9, this.night);
     }
@@ -807,6 +956,7 @@ export class Studio {
     else (this.floor.material as THREE.Material).dispose();
     this.floor.geometry.dispose();
     this.envTexture.dispose();
+    this.driveEnv?.dispose();
     this.backdrop.dispose();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
